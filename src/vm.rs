@@ -5,11 +5,12 @@ use tracing::debug;
 
 #[repr(u8)]
 pub enum OpCode {
-    CONSTANT,
+    CONSTANT = 1,
     ADD,
     MULTIPLY,
     SUBTRACT,
     NEGATE,
+    PRINT,
     Unsupported,
 }
 
@@ -112,6 +113,10 @@ impl VirtualMachine {
                     let left = self.pop()?;
                     debug!("NEGATE {}", left);
                     self.push((-left.val).into());
+                }
+                OpCode::PRINT => {
+                    let param = self.pop()?;
+                    println!("{}", param);
                 }
                 OpCode::Unsupported => return Err(VirtualMachineError::InvalidOpCode(op_code)),
             }
