@@ -3,7 +3,9 @@ use std::{default, ops::Range};
 use logos::{Logos, Skip};
 use thiserror::Error;
 
-type PosIdx = usize;
+use crate::parser::Span;
+
+pub type PosIdx = usize;
 
 #[derive(Logos, Debug, PartialEq, Clone, Copy)]
 #[logos(error = LexerError, extras = usize)]
@@ -129,16 +131,38 @@ impl Token {
     pub fn line(&self) -> usize {
         self.line
     }
+
+    pub fn start(&self) -> usize {
+        self.start
+    }
+
+    pub fn end(&self) -> usize {
+        self.end
+    }
+
+    pub fn span(&self) -> Span {
+        Span::new(self.start, self.end)
+    }
 }
 
 pub struct Lexer<'source> {
     logos_lexer: logos::Lexer<'source, TokenType>,
+    current: Option<Token>,
+}
+
+impl<'source> Iterator for Lexer<'source> {
+    type Item = Result<Token, LexerError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next()
+    }
 }
 
 impl<'source> Lexer<'source> {
     pub fn new(source: &'source str) -> Self {
         Self {
             logos_lexer: logos::Lexer::new(source),
+            current: None,
         }
     }
 
