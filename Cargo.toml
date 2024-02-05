@@ -8,6 +8,7 @@ version = "0.1.0"
 [dependencies]
 anyhow = "1.0.79"
 logos = "0.13.0"
+strum = {version = "0.26.1", features = ["derive"]}
 thiserror = "1.0.56"
 tracing = "0.1.40"
 tracing-subscriber = {version = "0.3.18", features = ["env-filter"]}

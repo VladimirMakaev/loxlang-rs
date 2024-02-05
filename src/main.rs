@@ -3,6 +3,7 @@ use vm::VirtualMachine;
 
 mod lexer;
 mod parser;
+mod value;
 mod vm;
 
 fn main() -> anyhow::Result<()> {
@@ -12,6 +13,6 @@ fn main() -> anyhow::Result<()> {
         .try_init()?;
 
     let mut vm = VirtualMachine::new();
-    vm.interpret("123+3")?;
+    vm.interpret("-2*2+5*(1+1)")?;
     Ok(())
 }

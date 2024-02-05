@@ -1,5 +1,6 @@
 use std::{iter::Peekable, num::ParseFloatError};
 
+use strum::{EnumIter, IntoEnumIterator};
 use thiserror::Error;
 
 use crate::lexer::{Lexer, LexerError, PosIdx, Token, TokenType};
@@ -14,7 +15,7 @@ pub enum ParseError {
         found: TokenType,
     },
     #[error("Expected token {expected:?} but reached eof")]
-    UnexpectedEof { expected: TokenType },
+    UnexpectedEof { expected: Option<TokenType> },
     #[error("Number literal can't be converted to number")]
     InvalidNumberLiteral {
         #[from]
@@ -25,6 +26,10 @@ pub enum ParseError {
         #[from]
         source: LexerError,
     },
+    #[error("Expected expression")]
+    ExpectedExpression,
+    #[error("Expected unary operator. Found {found:?}")]
+    UnexpectedUnaryOperator { found: TokenType },
 }
 
 pub trait Ast: Sized {
@@ -106,91 +111,255 @@ pub enum Expression {
 pub enum Stmt {
     Expression(AstExpression),
 }
-
-pub struct Parser<'source> {
-    lexer: Peekable<Lexer<'source>>,
-    source: &'source str,
-    had_errors: bool,
-    panic_mode: bool,
-}
-
-impl<'source> Parser<'source> {
-    pub fn expression(&mut self) -> Result<AstExpression, ParseError> {
-        self.term()
-    }
-
-    fn check(&mut self, ty: TokenType) -> Result<bool, ParseError> {
-        match self.lexer.peek() {
-            Some(Ok(t)) => Ok(t.ty() == ty),
-            _ => Ok(false),
-        }
-    }
-
-    fn consume(&mut self, ty: TokenType) -> Result<Token, ParseError> {
-        match self.lexer.next() {
-            Some(Ok(t)) => Ok(t),
-            Some(Err(error)) => Err(error.into()),
-            None => Err(ParseError::UnexpectedEof { expected: ty }),
-        }
-    }
-
-    pub fn term(&mut self) -> Result<AstExpression, ParseError> {
-        let mut left = self.factor()?;
-        while self.check(TokenType::PLUS)? {
-            self.consume(TokenType::PLUS)?;
-            let right = self.factor()?;
-            let ast_span = Span::new(left.start(), right.end());
-            left = Expression::Add {
-                left: Box::new(left),
-                right: Box::new(right),
-            }
-            .ast(ast_span);
-        }
-        Ok(left)
-    }
-
-    pub fn factor(&mut self) -> Result<AstExpression, ParseError> {
-        self.unary()
-    }
-
-    fn grouping(&mut self) -> Result<AstExpression, ParseError> {
-        let left_token = self.consume(TokenType::LEFT_PAREN)?;
-        let expression = self.expression()?;
-        let right_token = self.consume(TokenType::RIGHT_PAREN)?;
-        Ok(Expression::Grouping {
-            expr: Box::new(expression),
-        }
-        .ast(Span::new(left_token.start(), right_token.end())))
-    }
-
-    fn unary(&mut self) -> Result<AstExpression, ParseError> {
-        if self.check(TokenType::MINUS)? {
-            let token = self.consume(TokenType::MINUS)?;
-            let expression = self.expression()?;
-            let end = expression.end();
-            return Ok(Expression::UnaryNegation {
-                expr: Box::new(expression),
-            }
-            .ast(Span::new(token.start(), end)));
-        }
-        return self.number();
-    }
-
-    fn number(&mut self) -> Result<AstExpression, ParseError> {
-        let token = self.consume(TokenType::NUMBER)?;
-        let val = token.slice(self.source);
-        let number_literal = AstLiteral::NumberLiteral(val.parse::<f64>()?.ast(token.span()));
-        Ok(Expression::Literal(number_literal).ast(token.span()))
-    }
-}
-
 pub fn parse(code: &str) -> Result<AstExpression, ParseError> {
     let lexer = Lexer::new(code);
     let mut parser = Parser {
         lexer: lexer.peekable(),
-        source: code,
+        code: code,
         had_errors: false,
         panic_mode: false,
     };
     parser.expression()
+}
+
+pub struct Parser<'source> {
+    code: &'source str,
+    lexer: Peekable<Lexer<'source>>,
+    had_errors: bool,
+    panic_mode: bool,
+}
+
+type ParseResult = Result<AstExpression, ParseError>;
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, EnumIter)]
+enum Precedence {
+    NONE = 0,
+    LOWEST,
+    SUM,
+    MULT,
+    UNARY,
+    HIGHEST,
+}
+
+impl Precedence {
+    fn next(self) -> Self {
+        if self == Precedence::HIGHEST {
+            return self;
+        } else {
+            let value: u8 = unsafe { std::mem::transmute(self) };
+            unsafe { std::mem::transmute(value + 1) }
+        }
+    }
+}
+
+impl Into<u8> for Precedence {
+    fn into(self) -> u8 {
+        unsafe { std::mem::transmute(self) }
+    }
+}
+
+impl<'source> Parser<'source> {
+    fn consume(&mut self, token_type: TokenType) -> Result<Token, ParseError> {
+        match self.lexer.peek() {
+            Some(Ok(t)) => {
+                if t.ty() == token_type {
+                    Ok(self.lexer.next().unwrap()?)
+                } else {
+                    Err(ParseError::UnexpectedToken {
+                        expected: token_type,
+                        line: t.line(),
+                        span: t.span(),
+                        found: t.ty(),
+                    })
+                }
+            }
+            Some(Err(_)) => Ok(self.lexer.next().unwrap()?),
+            None => Err(ParseError::UnexpectedEof {
+                expected: Some(token_type),
+            }),
+        }
+    }
+
+    fn consume_next(&mut self) -> Result<Token, ParseError> {
+        if let Some(t) = self.lexer.next() {
+            Ok(t?)
+        } else {
+            Err(ParseError::UnexpectedEof { expected: None })
+        }
+    }
+
+    pub fn expression(&mut self) -> ParseResult {
+        self.parse_by_precedence(Precedence::LOWEST)
+    }
+
+    fn parse_by_precedence(&mut self, precedence: Precedence) -> ParseResult {
+        // 1 + 1 + 1
+        if let Some(Ok(token)) = self.lexer.peek() {
+            let (prefix_fn, _, _) = Self::precedence(token.ty());
+
+            if let Some(prefix_fn) = prefix_fn {
+                let mut result = prefix_fn(self)?;
+
+                while let Some(Ok(next_token)) = self.lexer.peek() {
+                    if let (Some(_), Some(infix_fn), infix_prec) = Self::precedence(next_token.ty())
+                    {
+                        if precedence <= infix_prec {
+                            result = infix_fn(self, result)?;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                return Ok(result);
+            }
+        }
+        return Err(ParseError::ExpectedExpression);
+    }
+
+    fn grouping(&mut self) -> ParseResult {
+        let l = self.consume(TokenType::LEFT_PAREN)?;
+        let result = self.expression()?;
+        let r = self.consume(TokenType::RIGHT_PAREN)?;
+        return Ok(Expression::Grouping {
+            expr: Box::new(result),
+        }
+        .ast(Span::new(l.start(), r.end())));
+    }
+
+    fn unary(&mut self) -> ParseResult {
+        let operator = self.consume_next()?;
+        let expression = self.parse_by_precedence(Precedence::UNARY)?;
+        let span = Span::new(operator.start(), expression.end());
+        match operator.ty() {
+            TokenType::MINUS => Ok(Expression::UnaryNegation {
+                expr: Box::new(expression),
+            }
+            .ast(span)),
+            _ => Err(ParseError::UnexpectedUnaryOperator {
+                found: operator.ty(),
+            }),
+        }
+    }
+
+    fn number(&mut self) -> ParseResult {
+        let number = self.consume(TokenType::NUMBER)?;
+        let number_literal =
+            AstLiteral::NumberLiteral(number.slice(self.code).parse::<f64>()?.ast(number.span()));
+        return Ok(Expression::Literal(number_literal).ast(number.span()));
+    }
+
+    fn binary(&mut self, left: AstExpression) -> ParseResult {
+        let operator = self.lexer.next().unwrap()?;
+        let (_, _, prec) = Self::precedence(operator.ty());
+        let right = self.parse_by_precedence(prec.next())?;
+        let span = Span::new(left.start(), right.end());
+        match operator.ty() {
+            TokenType::MINUS => Ok(Expression::Subtract {
+                left: Box::new(left),
+                right: Box::new(right),
+            }
+            .ast(span)),
+            TokenType::PLUS => Ok(Expression::Add {
+                left: Box::new(left),
+                right: Box::new(right),
+            }
+            .ast(span)),
+            TokenType::STAR => Ok(Expression::Multiply {
+                left: Box::new(left),
+                right: Box::new(right),
+            }
+            .ast(span)),
+            TokenType::SLASH => Ok(Expression::Divide {
+                left: Box::new(left),
+                right: Box::new(right),
+            }
+            .ast(span)),
+            _ => todo!(),
+        }
+    }
+
+    fn precedence(
+        token: TokenType,
+    ) -> (
+        Option<Box<dyn Fn(&mut Self) -> ParseResult>>,
+        Option<Box<dyn Fn(&mut Self, AstExpression) -> ParseResult>>,
+        Precedence,
+    ) {
+        match token {
+            TokenType::LEFT_PAREN => (Some(Box::new(Self::grouping)), None, Precedence::LOWEST),
+            TokenType::RIGHT_PAREN => (None, None, Precedence::NONE),
+            TokenType::MINUS => (
+                Some(Box::new(Self::unary)),
+                Some(Box::new(Self::binary)),
+                Precedence::SUM,
+            ),
+            TokenType::PLUS => (
+                Some(Box::new(Self::unary)),
+                Some(Box::new(Self::binary)),
+                Precedence::SUM,
+            ),
+            TokenType::STAR => (
+                Some(Box::new(Self::unary)),
+                Some(Box::new(Self::binary)),
+                Precedence::MULT,
+            ),
+            TokenType::SLASH => (
+                Some(Box::new(Self::unary)),
+                Some(Box::new(Self::binary)),
+                Precedence::MULT,
+            ),
+            TokenType::NUMBER => (Some(Box::new(Self::number)), None, Precedence::NONE),
+            _ => todo!(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test_case::test_case;
+
+    use crate::{lexer::Lexer, parser::Expression};
+
+    use super::parse;
+    use super::{AstExpression, AstLiteral, Parser};
+
+    #[test_case("4", 4.0; "test1")]
+    #[test_case("4+1", 5.0; "test2")]
+    #[test_case("2*(1+1)", 4.0; "test3")]
+    #[test_case("(5+2)+10", 17.0; "test4")]
+    #[test_case("10-5*2-5", -5.0; "test5")]
+    #[test_case("1+1+1", 3.0; "test6")]
+    #[test_case("2*(2*2+2*(2+3))", 28.0; "test7")]
+    #[test_case("-1*2-2", -4.0; "test8")]
+    fn test1(code: &str, expected: f64) {
+        assert_eq!(eval(&parse(code).unwrap()), expected);
+    }
+
+    fn eval(expression: &AstExpression) -> f64 {
+        match &expression.node {
+            Expression::Literal(AstLiteral::NumberLiteral(x)) => x.node,
+            Expression::Add { left, right } => {
+                let x = eval(left.as_ref());
+                let y = eval(right.as_ref());
+                return x + y;
+            }
+            Expression::Multiply { left, right } => {
+                let x = eval(left.as_ref());
+                let y = eval(right.as_ref());
+                return x * y;
+            }
+            Expression::Divide { left, right } => todo!(),
+            Expression::Subtract { left, right } => {
+                let x = eval(left.as_ref());
+                let y = eval(right.as_ref());
+                return x - y;
+            }
+            Expression::UnaryNegation { expr } => -1.0 * eval(&expr),
+            Expression::Grouping { expr } => eval(&expr),
+        }
+    }
 }

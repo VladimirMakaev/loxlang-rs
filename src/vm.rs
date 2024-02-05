@@ -1,9 +1,13 @@
 use std::{fmt::Display, io::Write};
 
+use logos::Logos;
 use thiserror::Error;
 use tracing::debug;
 
-use crate::parser::{parse, Ast, AstExpression, ParseError, Parser};
+use crate::{
+    parser::{parse, Ast, AstExpression, ParseError, Parser},
+    value::Value,
+};
 
 #[repr(u8)]
 pub enum OpCode {
@@ -54,23 +58,6 @@ impl ByteCode {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct Value {
-    val: f64,
-}
-
-impl Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.val)
-    }
-}
-
-impl From<f64> for Value {
-    fn from(value: f64) -> Self {
-        Self { val: value }
-    }
-}
-
 pub struct VirtualMachine {
     byte_code: ByteCode,
     ip: usize,
@@ -100,11 +87,15 @@ impl VirtualMachine {
         }
     }
 
+    fn set_bytecode(&mut self, byte_code: ByteCode) {
+        self.byte_code = byte_code;
+    }
+
     pub fn interpret(&mut self, code: &str) -> Result<(), VirtualMachineError> {
         let expression = parse(code)?;
         let mut byte_code = ByteCode::default();
         self.compile(&expression, &mut byte_code)?;
-        _ = std::mem::replace(&mut self.byte_code, byte_code);
+        self.set_bytecode(byte_code);
         self.run()
     }
 
@@ -123,37 +114,63 @@ impl VirtualMachine {
             .ok_or_else(|| VirtualMachineError::MissingStackOperand)
     }
 
-    pub fn run(&mut self) -> Result<(), VirtualMachineError> {
+    fn must_be_number() -> VirtualMachineError {
+        todo!()
+    }
+
+    fn eval_add(left: Value, right: Value) -> Result<Value, VirtualMachineError> {
+        Ok((left.as_number().ok_or_else(Self::must_be_number)?
+            + right.as_number().ok_or_else(Self::must_be_number)?)
+        .into())
+    }
+
+    fn eval_mult(left: Value, right: Value) -> Result<Value, VirtualMachineError> {
+        Ok((left.as_number().ok_or_else(Self::must_be_number)?
+            * right.as_number().ok_or_else(Self::must_be_number)?)
+        .into())
+    }
+
+    fn eval_sub(left: Value, right: Value) -> Result<Value, VirtualMachineError> {
+        Ok((left.as_number().ok_or_else(Self::must_be_number)?
+            - right.as_number().ok_or_else(Self::must_be_number)?)
+        .into())
+    }
+
+    fn eval_negate(val: Value) -> Result<Value, VirtualMachineError> {
+        Ok((-val.as_number().ok_or_else(Self::must_be_number)?).into())
+    }
+
+    fn run(&mut self) -> Result<(), VirtualMachineError> {
         while let Ok(op_code) = self.read_byte() {
             match TryInto::<OpCode>::try_into(op_code)? {
                 OpCode::CONSTANT => {
                     let b1 = self.read_byte()?;
                     let b2 = self.read_byte()?;
                     let idx = u16::from_ne_bytes([b1, b2]);
-                    self.push(self.constants[idx as usize]);
+                    self.push(self.constants[idx as usize].clone());
                 }
                 OpCode::ADD => {
                     let left = self.pop()?;
                     let right = self.pop()?;
                     debug!("ADD {} {}", left, right);
-                    self.push((left.val + right.val).into());
+                    self.push(Self::eval_add(left, right)?);
                 }
                 OpCode::MULTIPLY => {
                     let left = self.pop()?;
                     let right = self.pop()?;
                     debug!("MULTIPLY {} {}", left, right);
-                    self.push((left.val * right.val).into());
+                    self.push(Self::eval_mult(left, right)?);
                 }
                 OpCode::SUBTRACT => {
                     let left = self.pop()?;
                     let right = self.pop()?;
                     debug!("SUBTRACT {} {}", left, right);
-                    self.push((left.val - right.val).into());
+                    self.push(Self::eval_sub(left, right)?);
                 }
                 OpCode::NEGATE => {
-                    let left = self.pop()?;
-                    debug!("NEGATE {}", left);
-                    self.push((-left.val).into());
+                    let value = self.pop()?;
+                    debug!("NEGATE {}", value);
+                    self.push(Self::eval_negate(value)?);
                 }
                 OpCode::PRINT => {
                     let param = self.pop()?;
@@ -182,8 +199,12 @@ impl VirtualMachine {
                 bytes.emit_const(self.constants.len());
                 self.add_constant(num.node.into());
             }
-            crate::parser::Expression::Multiply { left, right } => {}
-            crate::parser::Expression::Divide { left, right } => {}
+            crate::parser::Expression::Multiply { left, right } => {
+                self.compile(&left.as_ref(), bytes)?;
+                self.compile(&right.as_ref(), bytes)?;
+                bytes.emit(OpCode::MULTIPLY);
+            }
+            crate::parser::Expression::Divide { left, right } => todo!(),
             crate::parser::Expression::Add { left, right } => {
                 self.compile(&left.as_ref(), bytes)?;
                 self.compile(&right.as_ref(), bytes)?;
