@@ -5,7 +5,8 @@ use thiserror::Error;
 use tracing::debug;
 
 use crate::{
-    parser::{parse, Ast, AstExpression, ParseError, Parser},
+    byte_code::ByteCode,
+    parser::{parse, Ast, AstExpression, LogicalExpression, ParseError, Parser},
     value::Value,
 };
 
@@ -16,14 +17,18 @@ pub enum OpCode {
     MULTIPLY,
     SUBTRACT,
     NEGATE,
+    NOT,
     PRINT,
+    TRUE,
+    FALSE,
+    NIL,
+    GREATER,
+    LESS,
     Unsupported,
 }
 
 impl OpCode {
-    pub fn write_to(self, bytes: &mut ByteCode) {
-        bytes.0.push(unsafe { std::mem::transmute(self) });
-    }
+    pub fn write_to(self, bytes: &mut ByteCode) {}
 }
 
 #[derive(Error, Debug)]
@@ -41,21 +46,6 @@ pub enum VirtualMachineError {
     MissingStackOperand,
     #[error("Unhandled error: {0:?}")]
     Unhandled(#[from] anyhow::Error),
-}
-
-#[derive(Default)]
-pub struct ByteCode(Vec<u8>);
-
-impl ByteCode {
-    pub fn emit_const(&mut self, idx: usize) {
-        self.0
-            .push(unsafe { std::mem::transmute(OpCode::CONSTANT) });
-        self.0.extend((idx as u16).to_ne_bytes())
-    }
-
-    pub fn emit(&mut self, op: OpCode) {
-        op.write_to(self);
-    }
 }
 
 pub struct VirtualMachine {
@@ -118,6 +108,10 @@ impl VirtualMachine {
         todo!()
     }
 
+    fn must_be_bool() -> VirtualMachineError {
+        todo!()
+    }
+
     fn eval_add(left: Value, right: Value) -> Result<Value, VirtualMachineError> {
         Ok((left.as_number().ok_or_else(Self::must_be_number)?
             + right.as_number().ok_or_else(Self::must_be_number)?)
@@ -144,9 +138,7 @@ impl VirtualMachine {
         while let Ok(op_code) = self.read_byte() {
             match TryInto::<OpCode>::try_into(op_code)? {
                 OpCode::CONSTANT => {
-                    let b1 = self.read_byte()?;
-                    let b2 = self.read_byte()?;
-                    let idx = u16::from_ne_bytes([b1, b2]);
+                    let idx = self.read_u16()?;
                     self.push(self.constants[idx as usize].clone());
                 }
                 OpCode::ADD => {
@@ -172,11 +164,26 @@ impl VirtualMachine {
                     debug!("NEGATE {}", value);
                     self.push(Self::eval_negate(value)?);
                 }
+                OpCode::NOT => {
+                    let value = self.pop()?.as_bool().ok_or_else(Self::must_be_bool)?;
+                    debug!("NOT {}", value);
+                    self.push((!value).into());
+                }
                 OpCode::PRINT => {
                     let param = self.pop()?;
                     println!("{}", param);
                 }
+                OpCode::TRUE => self.push(true.into()),
+                OpCode::FALSE => self.push(false.into()),
+                OpCode::NIL => self.push(Value::Nil),
                 OpCode::Unsupported => return Err(VirtualMachineError::InvalidOpCode(op_code)),
+                OpCode::GREATER => {
+                    let left = self.pop()?.as_number().ok_or_else(Self::must_be_number)?;
+                    let right = self.pop()?.as_number().ok_or_else(Self::must_be_number)?;
+                    debug!("GREATER {} {}", left, right);
+                    self.push((left > right).into());
+                }
+                OpCode::LESS => todo!(),
             }
         }
 
@@ -184,9 +191,21 @@ impl VirtualMachine {
     }
 
     pub fn read_byte(&mut self) -> Result<u8, VirtualMachineError> {
-        let result = self.byte_code.0.get(self.ip).map(ToOwned::to_owned);
+        if self.ip >= self.byte_code.size() {
+            return Err(VirtualMachineError::UnexpectedEndOfByteCode);
+        }
+        let result = self.byte_code.get_byte(self.ip);
         self.ip += 1;
-        result.ok_or_else(|| VirtualMachineError::UnexpectedEndOfByteCode)
+        Ok(result)
+    }
+
+    pub fn read_u16(&mut self) -> Result<u16, VirtualMachineError> {
+        if self.ip + 1 >= self.byte_code.size() {
+            return Err(VirtualMachineError::UnexpectedEndOfByteCode);
+        }
+        let result = self.byte_code.get_u16(self.ip);
+        self.ip += 2;
+        Ok(result)
     }
 
     pub fn compile(
@@ -196,27 +215,51 @@ impl VirtualMachine {
     ) -> Result<(), VirtualMachineError> {
         match expr.node() {
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NumberLiteral(num)) => {
-                bytes.emit_const(self.constants.len());
-                self.add_constant(num.node.into());
+                bytes.emit_const(self.constants.len(), expr.start());
+                self.add_constant((*num).into());
+            }
+            crate::parser::Expression::Literal(crate::parser::AstLiteral::BoolLiteral(x)) => {
+                if *x {
+                    bytes.emit(OpCode::TRUE, expr.start());
+                } else {
+                    bytes.emit(OpCode::FALSE, expr.start());
+                }
+            }
+            crate::parser::Expression::Literal(crate::parser::AstLiteral::NilLiteral) => {
+                bytes.emit(OpCode::NIL, expr.start());
             }
             crate::parser::Expression::Multiply { left, right } => {
                 self.compile(&left.as_ref(), bytes)?;
                 self.compile(&right.as_ref(), bytes)?;
-                bytes.emit(OpCode::MULTIPLY);
+                bytes.emit(OpCode::MULTIPLY, left.start());
             }
             crate::parser::Expression::Divide { left, right } => todo!(),
             crate::parser::Expression::Add { left, right } => {
                 self.compile(&left.as_ref(), bytes)?;
                 self.compile(&right.as_ref(), bytes)?;
-                bytes.emit(OpCode::ADD);
+                bytes.emit(OpCode::ADD, left.start());
             }
             crate::parser::Expression::Subtract { left, right } => {}
             crate::parser::Expression::UnaryNegation { expr } => {
                 self.compile(expr.as_ref(), bytes)?;
-                bytes.emit(OpCode::NEGATE);
+                bytes.emit(OpCode::NEGATE, expr.start());
             }
             crate::parser::Expression::Grouping { expr } => {
                 self.compile(&expr, bytes)?;
+            }
+            crate::parser::Expression::UnaryNot { expr } => {
+                self.compile(expr, bytes)?;
+                bytes.emit(OpCode::NOT, expr.start());
+            }
+            crate::parser::Expression::Logical(LogicalExpression::Greater { left, right }) => {
+                self.compile(&right, bytes)?;
+                self.compile(&left, bytes)?;
+                bytes.emit(OpCode::GREATER, left.start());
+            }
+            crate::parser::Expression::Logical(LogicalExpression::Less { left, right }) => {
+                self.compile(&right, bytes)?;
+                self.compile(&left, bytes)?;
+                bytes.emit(OpCode::LESS, left.start());
             }
         }
 

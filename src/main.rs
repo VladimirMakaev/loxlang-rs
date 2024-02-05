@@ -1,6 +1,7 @@
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 use vm::VirtualMachine;
 
+mod byte_code;
 mod lexer;
 mod parser;
 mod value;
@@ -13,6 +14,6 @@ fn main() -> anyhow::Result<()> {
         .try_init()?;
 
     let mut vm = VirtualMachine::new();
-    vm.interpret("-2*2+5*(1+1)")?;
+    vm.interpret("!(10>2)")?;
     Ok(())
 }

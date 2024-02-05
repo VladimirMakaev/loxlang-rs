@@ -16,6 +16,14 @@ impl Value {
             None
         }
     }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        if let Value::Bool(x) = self {
+            Some(*x)
+        } else {
+            None
+        }
+    }
 }
 
 impl Display for Value {
@@ -32,5 +40,11 @@ impl Display for Value {
 impl From<f64> for Value {
     fn from(value: f64) -> Self {
         Value::Number(value)
+    }
+}
+
+impl From<bool> for Value {
+    fn from(value: bool) -> Self {
+        Value::Bool(value)
     }
 }

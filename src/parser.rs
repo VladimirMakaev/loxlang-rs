@@ -30,6 +30,8 @@ pub enum ParseError {
     ExpectedExpression,
     #[error("Expected unary operator. Found {found:?}")]
     UnexpectedUnaryOperator { found: TokenType },
+    #[error("Expected boolean literal. Found {found:?}")]
+    UnsatisfiedBoolLiteral { found: TokenType },
 }
 
 pub trait Ast: Sized {
@@ -72,14 +74,25 @@ impl<T> Spanned<T> {
 }
 
 pub type AstExpression = Spanned<Expression>;
-pub type AstNumber = Spanned<f64>;
 pub type AstStmt = Spanned<Stmt>;
 
 pub enum AstLiteral {
-    NumberLiteral(AstNumber),
+    NumberLiteral(f64),
+    NilLiteral,
+    BoolLiteral(bool),
     //StringLiteral(AstString),
-    //TrueLiteral,
     //FalseLiteral,
+}
+
+pub enum LogicalExpression {
+    Greater {
+        left: Box<AstExpression>,
+        right: Box<AstExpression>,
+    },
+    Less {
+        left: Box<AstExpression>,
+        right: Box<AstExpression>,
+    },
 }
 
 pub enum Expression {
@@ -103,9 +116,13 @@ pub enum Expression {
     UnaryNegation {
         expr: Box<AstExpression>,
     },
+    UnaryNot {
+        expr: Box<AstExpression>,
+    },
     Grouping {
         expr: Box<AstExpression>,
     },
+    Logical(LogicalExpression),
 }
 
 pub enum Stmt {
@@ -136,6 +153,7 @@ type ParseResult = Result<AstExpression, ParseError>;
 enum Precedence {
     NONE = 0,
     LOWEST,
+    LOGICAL,
     SUM,
     MULT,
     UNARY,
@@ -202,8 +220,7 @@ impl<'source> Parser<'source> {
                 let mut result = prefix_fn(self)?;
 
                 while let Some(Ok(next_token)) = self.lexer.peek() {
-                    if let (Some(_), Some(infix_fn), infix_prec) = Self::precedence(next_token.ty())
-                    {
+                    if let (_, Some(infix_fn), infix_prec) = Self::precedence(next_token.ty()) {
                         if precedence <= infix_prec {
                             result = infix_fn(self, result)?;
                         } else {
@@ -239,17 +256,61 @@ impl<'source> Parser<'source> {
                 expr: Box::new(expression),
             }
             .ast(span)),
+            TokenType::BANG => Ok(Expression::UnaryNot {
+                expr: Box::new(expression),
+            }
+            .ast(span)),
             _ => Err(ParseError::UnexpectedUnaryOperator {
                 found: operator.ty(),
             }),
         }
     }
 
+    fn logical(&mut self, left: AstExpression) -> ParseResult {
+        let operator = self.consume_next()?;
+        let right = self.parse_by_precedence(Precedence::LOGICAL)?;
+        let span = Span::new(left.start(), right.end());
+        match operator.ty() {
+            TokenType::BANG_EQUAL => todo!(),
+            TokenType::EQUAL_EQUAL => todo!(),
+            TokenType::GREATER => Ok(Expression::Logical(LogicalExpression::Greater {
+                left: Box::new(left),
+                right: Box::new(right),
+            })
+            .ast(span)),
+            TokenType::GREATER_EQUAL => todo!(),
+            TokenType::LESS => Ok(Expression::Logical(LogicalExpression::Less {
+                left: Box::new(left),
+                right: Box::new(right),
+            })
+            .ast(span)),
+            TokenType::LESS_EQUAL => todo!(),
+            _ => todo!(),
+        }
+    }
+
     fn number(&mut self) -> ParseResult {
         let number = self.consume(TokenType::NUMBER)?;
-        let number_literal =
-            AstLiteral::NumberLiteral(number.slice(self.code).parse::<f64>()?.ast(number.span()));
+        let number_literal = AstLiteral::NumberLiteral(number.slice(self.code).parse::<f64>()?);
         return Ok(Expression::Literal(number_literal).ast(number.span()));
+    }
+
+    fn nil(&mut self) -> ParseResult {
+        let number = self.consume(TokenType::NIL)?;
+        Ok(Expression::Literal(AstLiteral::NilLiteral).ast(number.span()))
+    }
+
+    fn bool(&mut self) -> ParseResult {
+        let bool = self.consume_next()?;
+        match bool.ty() {
+            TokenType::TRUE => {
+                Ok(Expression::Literal(AstLiteral::BoolLiteral(true)).ast(bool.span()))
+            }
+            TokenType::FALSE => {
+                Ok(Expression::Literal(AstLiteral::BoolLiteral(false)).ast(bool.span()))
+            }
+            _ => Err(ParseError::UnsatisfiedBoolLiteral { found: bool.ty() }),
+        }
     }
 
     fn binary(&mut self, left: AstExpression) -> ParseResult {
@@ -292,6 +353,17 @@ impl<'source> Parser<'source> {
         match token {
             TokenType::LEFT_PAREN => (Some(Box::new(Self::grouping)), None, Precedence::LOWEST),
             TokenType::RIGHT_PAREN => (None, None, Precedence::NONE),
+            TokenType::NIL => (Some(Box::new(Self::nil)), None, Precedence::NONE),
+            TokenType::BANG => (Some(Box::new(Self::unary)), None, Precedence::UNARY),
+            TokenType::TRUE | TokenType::FALSE => {
+                (Some(Box::new(Self::bool)), None, Precedence::NONE)
+            }
+            TokenType::EQUAL_EQUAL
+            | TokenType::BANG_EQUAL
+            | TokenType::GREATER
+            | TokenType::GREATER_EQUAL
+            | TokenType::LESS
+            | TokenType::LESS_EQUAL => (None, Some(Box::new(Self::logical)), Precedence::LOGICAL),
             TokenType::MINUS => (
                 Some(Box::new(Self::unary)),
                 Some(Box::new(Self::binary)),
@@ -324,7 +396,7 @@ mod tests {
 
     use crate::{lexer::Lexer, parser::Expression};
 
-    use super::parse;
+    use super::{parse, LogicalExpression};
     use super::{AstExpression, AstLiteral, Parser};
 
     #[test_case("4", 4.0; "test1")]
@@ -335,13 +407,45 @@ mod tests {
     #[test_case("1+1+1", 3.0; "test6")]
     #[test_case("2*(2*2+2*(2+3))", 28.0; "test7")]
     #[test_case("-1*2-2", -4.0; "test8")]
-    fn test1(code: &str, expected: f64) {
+    fn test_calculator(code: &str, expected: f64) {
         assert_eq!(eval(&parse(code).unwrap()), expected);
+    }
+
+    #[test_case("true", true; "bool1")]
+    #[test_case("false", false; "bool2")]
+    #[test_case("!false", true; "bool3")]
+    #[test_case("!!false", false; "bool4")]
+    #[test_case("!(5 > 4)", false; "bool5")]
+    #[test_case("!(5 > 4*2)", true; "bool6")]
+    #[test_case("!(5 < 4*2)", false; "bool7")]
+    fn test_booleans(code: &str, expected: bool) {
+        assert_eq!(eval_bool(&parse(code).unwrap()), expected);
+    }
+
+    fn eval_bool(expression: &AstExpression) -> bool {
+        match &expression.node {
+            Expression::Literal(AstLiteral::BoolLiteral(x)) => *x,
+            Expression::Literal(_) => unimplemented!(),
+            Expression::Multiply { left, right } => todo!(),
+            Expression::Divide { left, right } => todo!(),
+            Expression::Add { left, right } => todo!(),
+            Expression::Subtract { left, right } => todo!(),
+            Expression::UnaryNegation { expr } => todo!(),
+            Expression::Grouping { expr } => eval_bool(&expr),
+            Expression::UnaryNot { expr } => !eval_bool(expr),
+            Expression::Logical(LogicalExpression::Greater { left, right }) => {
+                eval(&left) > eval(&right)
+            }
+            Expression::Logical(LogicalExpression::Less { left, right }) => {
+                eval(&left) < eval(&right)
+            }
+        }
     }
 
     fn eval(expression: &AstExpression) -> f64 {
         match &expression.node {
-            Expression::Literal(AstLiteral::NumberLiteral(x)) => x.node,
+            Expression::Literal(AstLiteral::NumberLiteral(x)) => *x,
+            Expression::Literal(_) => unimplemented!(),
             Expression::Add { left, right } => {
                 let x = eval(left.as_ref());
                 let y = eval(right.as_ref());
@@ -360,6 +464,7 @@ mod tests {
             }
             Expression::UnaryNegation { expr } => -1.0 * eval(&expr),
             Expression::Grouping { expr } => eval(&expr),
+            _ => unimplemented!(),
         }
     }
 }
