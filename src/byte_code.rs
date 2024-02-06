@@ -32,6 +32,6 @@ impl ByteCode {
     }
 
     pub fn get_op(&self, ip: usize) -> OpCode {
-        unsafe { std::mem::transmute(self.get_op(ip)) }
+        unsafe { std::mem::transmute(self.get_byte(ip)) }
     }
 }

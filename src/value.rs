@@ -1,11 +1,50 @@
-use std::fmt::Display;
+use std::{borrow::Cow, fmt::Display, rc::Rc};
 
-#[derive(Clone)]
+#[derive(Clone, strum::EnumDiscriminants)]
+#[strum_discriminants(name(ValueTypes))]
+#[strum_discriminants(derive(strum::Display))]
 pub enum Value {
     Number(f64),
     Bool(bool),
     Nil,
-    String(Box<String>),
+    Object(ObjectRef),
+}
+
+#[derive(Clone)]
+pub struct ObjectRef {
+    pub idx: usize,
+    pub ty: Rc<dyn ObjectType>,
+}
+
+pub trait ObjectType {
+    fn type_name(&self) -> &'static str;
+    fn base_object(&self) -> Option<ObjectRef>;
+    //fn hash(&self) -> usize;
+    //fn eq(&self, other: &Self) -> bool;
+}
+
+#[derive(Clone)]
+pub struct StringObject {
+    pub value: Rc<String>,
+}
+
+impl StringObject {
+    pub fn new_ref(object_id: usize, val: Rc<String>) -> ObjectRef {
+        ObjectRef {
+            idx: object_id,
+            ty: Rc::new(Self { value: val }),
+        }
+    }
+}
+
+impl ObjectType for StringObject {
+    fn type_name(&self) -> &'static str {
+        "string"
+    }
+
+    fn base_object(&self) -> Option<ObjectRef> {
+        None
+    }
 }
 
 impl Value {
@@ -32,7 +71,7 @@ impl Display for Value {
             Value::Number(x) => write!(f, "{}", x),
             Value::Bool(x) => write!(f, "{}", x),
             Value::Nil => f.write_str("nil"),
-            Value::String(x) => write!(f, "{}", x),
+            _ => todo!(), //Value::String(x) => write!(f, "{}", x),
         }
     }
 }

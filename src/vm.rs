@@ -1,4 +1,4 @@
-use std::{fmt::Display, io::Write};
+use std::{borrow::Cow, collections::HashMap, fmt::Display, io::Write, rc::Rc};
 
 use logos::Logos;
 use thiserror::Error;
@@ -7,9 +7,10 @@ use tracing::debug;
 use crate::{
     byte_code::ByteCode,
     parser::{parse, Ast, AstExpression, LogicalExpression, ParseError, Parser},
-    value::Value,
+    value::{ObjectRef, StringObject, Value, ValueTypes},
 };
 
+#[derive(strum::Display, Debug)]
 #[repr(u8)]
 pub enum OpCode {
     CONSTANT = 1,
@@ -44,15 +45,31 @@ pub enum VirtualMachineError {
     UnexpectedEndOfByteCode,
     #[error("Expected operand on the stack but none found.")]
     MissingStackOperand,
+    #[error(
+        "Instruction {instruction} expected stack operand of type '{expected}'. Got : '{actual}"
+    )]
+    UnexpectedStackOperandType {
+        instruction: OpCode,
+        expected: ValueTypes,
+        actual: ValueTypes,
+    },
     #[error("Unhandled error: {0:?}")]
     Unhandled(#[from] anyhow::Error),
 }
 
-pub struct VirtualMachine {
+pub struct VirtualMachine<'vm> {
     byte_code: ByteCode,
     ip: usize,
     stack: Vec<Value>,
     constants: Vec<Value>,
+    all_objects: Vec<ObjectRef>,
+    all_strings: HashMap<&'vm str, usize>,
+    all_strings2: HashMap<Rc<String>, usize>,
+}
+
+pub struct DS<'a> {
+    all_strings: Vec<String>,
+    by_name: HashMap<&'a str, usize>,
 }
 
 impl TryInto<OpCode> for u8 {
@@ -67,13 +84,16 @@ impl TryInto<OpCode> for u8 {
     }
 }
 
-impl VirtualMachine {
+impl<'vm> VirtualMachine<'vm> {
     pub fn new() -> Self {
         Self {
             byte_code: Default::default(),
             constants: Default::default(),
             ip: 0,
             stack: Default::default(),
+            all_objects: Default::default(),
+            all_strings: Default::default(),
+            all_strings2: Default::default(),
         }
     }
 
@@ -81,7 +101,7 @@ impl VirtualMachine {
         self.byte_code = byte_code;
     }
 
-    pub fn interpret(&mut self, code: &str) -> Result<(), VirtualMachineError> {
+    pub fn interpret(&mut self, code: &'vm str) -> Result<(), VirtualMachineError> {
         let expression = parse(code)?;
         let mut byte_code = ByteCode::default();
         self.compile(&expression, &mut byte_code)?;
@@ -104,34 +124,41 @@ impl VirtualMachine {
             .ok_or_else(|| VirtualMachineError::MissingStackOperand)
     }
 
-    fn must_be_number() -> VirtualMachineError {
-        todo!()
+    fn pop_number(&mut self, op_code: OpCode) -> Result<f64, VirtualMachineError> {
+        let value = self.pop()?;
+        Ok(value
+            .as_number()
+            .ok_or_else(|| VirtualMachineError::UnexpectedStackOperandType {
+                instruction: op_code,
+                expected: ValueTypes::Number,
+                actual: value.into(),
+            })?)
     }
 
-    fn must_be_bool() -> VirtualMachineError {
-        todo!()
+    fn pop_bool(&mut self, op_code: OpCode) -> Result<bool, VirtualMachineError> {
+        let value = self.pop()?;
+        Ok(value
+            .as_bool()
+            .ok_or_else(|| VirtualMachineError::UnexpectedStackOperandType {
+                instruction: op_code,
+                expected: ValueTypes::Bool,
+                actual: value.into(),
+            })?)
     }
 
-    fn eval_add(left: Value, right: Value) -> Result<Value, VirtualMachineError> {
-        Ok((left.as_number().ok_or_else(Self::must_be_number)?
-            + right.as_number().ok_or_else(Self::must_be_number)?)
-        .into())
-    }
+    fn get_or_create_string(&mut self, val: impl Into<Cow<'vm, str>>) -> Value {
+        let str_val: Cow<'vm, str> = val.into();
+        if let Some(object_id) = self.all_strings.get(str_val.as_ref()) {
+            Value::Object(self.all_objects[*object_id].clone())
+        } else {
+            let object_id = self.all_objects.len();
+            let str_val = Rc::new(str_val.into_owned());
+            self.all_objects
+                .push(StringObject::new_ref(object_id, str_val.clone()));
+            self.all_strings2.insert(str_val, object_id);
 
-    fn eval_mult(left: Value, right: Value) -> Result<Value, VirtualMachineError> {
-        Ok((left.as_number().ok_or_else(Self::must_be_number)?
-            * right.as_number().ok_or_else(Self::must_be_number)?)
-        .into())
-    }
-
-    fn eval_sub(left: Value, right: Value) -> Result<Value, VirtualMachineError> {
-        Ok((left.as_number().ok_or_else(Self::must_be_number)?
-            - right.as_number().ok_or_else(Self::must_be_number)?)
-        .into())
-    }
-
-    fn eval_negate(val: Value) -> Result<Value, VirtualMachineError> {
-        Ok((-val.as_number().ok_or_else(Self::must_be_number)?).into())
+            Value::Object(self.all_objects[object_id].clone())
+        }
     }
 
     fn run(&mut self) -> Result<(), VirtualMachineError> {
@@ -139,33 +166,33 @@ impl VirtualMachine {
             match TryInto::<OpCode>::try_into(op_code)? {
                 OpCode::CONSTANT => {
                     let idx = self.read_u16()?;
-                    self.push(self.constants[idx as usize].clone());
+                    //self.push(self.constants[idx as usize].clone());
                 }
                 OpCode::ADD => {
-                    let left = self.pop()?;
-                    let right = self.pop()?;
+                    let left = self.pop_number(OpCode::ADD)?;
+                    let right = self.pop_number(OpCode::ADD)?;
                     debug!("ADD {} {}", left, right);
-                    self.push(Self::eval_add(left, right)?);
+                    self.push((left + right).into());
                 }
                 OpCode::MULTIPLY => {
-                    let left = self.pop()?;
-                    let right = self.pop()?;
+                    let left = self.pop_number(OpCode::MULTIPLY)?;
+                    let right = self.pop_number(OpCode::MULTIPLY)?;
                     debug!("MULTIPLY {} {}", left, right);
-                    self.push(Self::eval_mult(left, right)?);
+                    self.push((left * right).into());
                 }
                 OpCode::SUBTRACT => {
-                    let left = self.pop()?;
-                    let right = self.pop()?;
+                    let left = self.pop_number(OpCode::MULTIPLY)?;
+                    let right = self.pop_number(OpCode::MULTIPLY)?;
                     debug!("SUBTRACT {} {}", left, right);
-                    self.push(Self::eval_sub(left, right)?);
+                    self.push((left - right).into());
                 }
                 OpCode::NEGATE => {
-                    let value = self.pop()?;
+                    let value = self.pop_number(OpCode::NEGATE)?;
                     debug!("NEGATE {}", value);
-                    self.push(Self::eval_negate(value)?);
+                    self.push((-value).into());
                 }
                 OpCode::NOT => {
-                    let value = self.pop()?.as_bool().ok_or_else(Self::must_be_bool)?;
+                    let value = self.pop_bool(OpCode::NOT)?;
                     debug!("NOT {}", value);
                     self.push((!value).into());
                 }
@@ -176,14 +203,19 @@ impl VirtualMachine {
                 OpCode::TRUE => self.push(true.into()),
                 OpCode::FALSE => self.push(false.into()),
                 OpCode::NIL => self.push(Value::Nil),
-                OpCode::Unsupported => return Err(VirtualMachineError::InvalidOpCode(op_code)),
                 OpCode::GREATER => {
-                    let left = self.pop()?.as_number().ok_or_else(Self::must_be_number)?;
-                    let right = self.pop()?.as_number().ok_or_else(Self::must_be_number)?;
+                    let left = self.pop_number(OpCode::GREATER)?;
+                    let right = self.pop_number(OpCode::GREATER)?;
                     debug!("GREATER {} {}", left, right);
                     self.push((left > right).into());
                 }
-                OpCode::LESS => todo!(),
+                OpCode::LESS => {
+                    let left = self.pop_number(OpCode::LESS)?;
+                    let right = self.pop_number(OpCode::LESS)?;
+                    debug!("LESS {} {}", left, right);
+                    self.push((left < right).into());
+                }
+                OpCode::Unsupported => return Err(VirtualMachineError::InvalidOpCode(op_code)),
             }
         }
 
