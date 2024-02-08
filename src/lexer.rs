@@ -1,4 +1,4 @@
-use std::{default, ops::Range};
+
 
 use logos::{Logos, Skip};
 use thiserror::Error;
@@ -93,7 +93,7 @@ pub enum TokenType {
     NEWLINE,
 }
 
-fn on_error(lex: &mut logos::Lexer<TokenType>) -> logos::Skip {
+fn on_error(_lex: &mut logos::Lexer<TokenType>) -> logos::Skip {
     Skip
 }
 

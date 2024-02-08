@@ -2,6 +2,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 use vm::VirtualMachine;
 
 mod byte_code;
+mod interner;
 mod lexer;
 mod parser;
 mod value;

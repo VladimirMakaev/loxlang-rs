@@ -1,50 +1,26 @@
-use std::{borrow::Cow, fmt::Display, rc::Rc};
+use std::fmt::Display;
 
 #[derive(Clone, strum::EnumDiscriminants)]
 #[strum_discriminants(name(ValueTypes))]
 #[strum_discriminants(derive(strum::Display))]
+#[repr(u8)]
 pub enum Value {
     Number(f64),
     Bool(bool),
     Nil,
-    Object(ObjectRef),
+    Object(ObjectValue),
 }
 
-#[derive(Clone)]
-pub struct ObjectRef {
-    pub idx: usize,
-    pub ty: Rc<dyn ObjectType>,
+#[derive(Clone, Copy)]
+pub enum ObjectType {
+    String,
+    Class,
 }
 
-pub trait ObjectType {
-    fn type_name(&self) -> &'static str;
-    fn base_object(&self) -> Option<ObjectRef>;
-    //fn hash(&self) -> usize;
-    //fn eq(&self, other: &Self) -> bool;
-}
-
-#[derive(Clone)]
-pub struct StringObject {
-    pub value: Rc<String>,
-}
-
-impl StringObject {
-    pub fn new_ref(object_id: usize, val: Rc<String>) -> ObjectRef {
-        ObjectRef {
-            idx: object_id,
-            ty: Rc::new(Self { value: val }),
-        }
-    }
-}
-
-impl ObjectType for StringObject {
-    fn type_name(&self) -> &'static str {
-        "string"
-    }
-
-    fn base_object(&self) -> Option<ObjectRef> {
-        None
-    }
+#[derive(Clone, Copy)]
+pub struct ObjectValue {
+    ty: ObjectType,
+    object_id: usize,
 }
 
 impl Value {

@@ -1,13 +1,13 @@
-use std::{borrow::Cow, collections::HashMap, fmt::Display, io::Write, rc::Rc};
+use std::{borrow::Cow, collections::HashMap, io::Write, marker::PhantomData, rc::Rc};
 
-use logos::Logos;
 use thiserror::Error;
 use tracing::debug;
 
 use crate::{
     byte_code::ByteCode,
-    parser::{parse, Ast, AstExpression, LogicalExpression, ParseError, Parser},
-    value::{ObjectRef, StringObject, Value, ValueTypes},
+    interner::Interner,
+    parser::{parse, AstExpression, LogicalExpression, ParseError},
+    value::{ObjectValue, Value, ValueTypes},
 };
 
 #[derive(strum::Display, Debug)]
@@ -29,7 +29,7 @@ pub enum OpCode {
 }
 
 impl OpCode {
-    pub fn write_to(self, bytes: &mut ByteCode) {}
+    pub fn write_to(self, _bytes: &mut ByteCode) {}
 }
 
 #[derive(Error, Debug)]
@@ -57,19 +57,13 @@ pub enum VirtualMachineError {
     Unhandled(#[from] anyhow::Error),
 }
 
-pub struct VirtualMachine<'vm> {
+pub struct VirtualMachine {
     byte_code: ByteCode,
     ip: usize,
     stack: Vec<Value>,
     constants: Vec<Value>,
-    all_objects: Vec<ObjectRef>,
-    all_strings: HashMap<&'vm str, usize>,
-    all_strings2: HashMap<Rc<String>, usize>,
-}
-
-pub struct DS<'a> {
-    all_strings: Vec<String>,
-    by_name: HashMap<&'a str, usize>,
+    all_objects: Vec<ObjectValue>,
+    //all_strings: Interner,
 }
 
 impl TryInto<OpCode> for u8 {
@@ -84,7 +78,7 @@ impl TryInto<OpCode> for u8 {
     }
 }
 
-impl<'vm> VirtualMachine<'vm> {
+impl VirtualMachine {
     pub fn new() -> Self {
         Self {
             byte_code: Default::default(),
@@ -92,8 +86,6 @@ impl<'vm> VirtualMachine<'vm> {
             ip: 0,
             stack: Default::default(),
             all_objects: Default::default(),
-            all_strings: Default::default(),
-            all_strings2: Default::default(),
         }
     }
 
@@ -101,7 +93,7 @@ impl<'vm> VirtualMachine<'vm> {
         self.byte_code = byte_code;
     }
 
-    pub fn interpret(&mut self, code: &'vm str) -> Result<(), VirtualMachineError> {
+    pub fn interpret(&mut self, code: &str) -> Result<(), VirtualMachineError> {
         let expression = parse(code)?;
         let mut byte_code = ByteCode::default();
         self.compile(&expression, &mut byte_code)?;
@@ -146,26 +138,25 @@ impl<'vm> VirtualMachine<'vm> {
             })?)
     }
 
-    fn get_or_create_string(&mut self, val: impl Into<Cow<'vm, str>>) -> Value {
-        let str_val: Cow<'vm, str> = val.into();
-        if let Some(object_id) = self.all_strings.get(str_val.as_ref()) {
-            Value::Object(self.all_objects[*object_id].clone())
-        } else {
-            let object_id = self.all_objects.len();
-            let str_val = Rc::new(str_val.into_owned());
-            self.all_objects
-                .push(StringObject::new_ref(object_id, str_val.clone()));
-            self.all_strings2.insert(str_val, object_id);
+    fn get_or_create_string(&mut self, val: String) -> Value {
+        // if let Some(object_id) = self.all_strings.get(str_val.as_ref()) {
+        //     Value::Object(self.all_objects[*object_id].clone())
+        // } else {
+        //     let object_id = self.all_objects.len();
+        //     let str_val = Rc::new(str_val.into_owned());
+        //     self.all_objects
+        //         .push(StringObject::new_ref(object_id, str_val.clone()));
 
-            Value::Object(self.all_objects[object_id].clone())
-        }
+        //     Value::Object(self.all_objects[object_id].clone())
+        // }
+        todo!()
     }
 
     fn run(&mut self) -> Result<(), VirtualMachineError> {
         while let Ok(op_code) = self.read_byte() {
             match TryInto::<OpCode>::try_into(op_code)? {
                 OpCode::CONSTANT => {
-                    let idx = self.read_u16()?;
+                    let _idx = self.read_u16()?;
                     //self.push(self.constants[idx as usize].clone());
                 }
                 OpCode::ADD => {
@@ -265,13 +256,13 @@ impl<'vm> VirtualMachine<'vm> {
                 self.compile(&right.as_ref(), bytes)?;
                 bytes.emit(OpCode::MULTIPLY, left.start());
             }
-            crate::parser::Expression::Divide { left, right } => todo!(),
+            crate::parser::Expression::Divide { left: _, right: _ } => todo!(),
             crate::parser::Expression::Add { left, right } => {
                 self.compile(&left.as_ref(), bytes)?;
                 self.compile(&right.as_ref(), bytes)?;
                 bytes.emit(OpCode::ADD, left.start());
             }
-            crate::parser::Expression::Subtract { left, right } => {}
+            crate::parser::Expression::Subtract { left: _, right: _ } => {}
             crate::parser::Expression::UnaryNegation { expr } => {
                 self.compile(expr.as_ref(), bytes)?;
                 bytes.emit(OpCode::NEGATE, expr.start());

@@ -11,6 +11,7 @@ logos = "0.13.0"
 strum = {version = "0.26.1", features = ["derive"]}
 thiserror = "1.0.56"
 tracing = "0.1.40"
+hashbrown = "0.14.3"
 tracing-subscriber = {version = "0.3.18", features = ["env-filter"]}
 
 [dev-dependencies]

@@ -1,6 +1,6 @@
 use std::{iter::Peekable, num::ParseFloatError};
 
-use strum::{EnumIter, IntoEnumIterator};
+use strum::{EnumIter};
 use thiserror::Error;
 
 use crate::lexer::{Lexer, LexerError, PosIdx, Token, TokenType};
@@ -394,10 +394,10 @@ impl<'source> Parser<'source> {
 mod tests {
     use test_case::test_case;
 
-    use crate::{lexer::Lexer, parser::Expression};
+    use crate::{parser::Expression};
 
     use super::{parse, LogicalExpression};
-    use super::{AstExpression, AstLiteral, Parser};
+    use super::{AstExpression, AstLiteral};
 
     #[test_case("4", 4.0; "test1")]
     #[test_case("4+1", 5.0; "test2")]
@@ -426,11 +426,11 @@ mod tests {
         match &expression.node {
             Expression::Literal(AstLiteral::BoolLiteral(x)) => *x,
             Expression::Literal(_) => unimplemented!(),
-            Expression::Multiply { left, right } => todo!(),
-            Expression::Divide { left, right } => todo!(),
-            Expression::Add { left, right } => todo!(),
-            Expression::Subtract { left, right } => todo!(),
-            Expression::UnaryNegation { expr } => todo!(),
+            Expression::Multiply { left: _, right: _ } => todo!(),
+            Expression::Divide { left: _, right: _ } => todo!(),
+            Expression::Add { left: _, right: _ } => todo!(),
+            Expression::Subtract { left: _, right: _ } => todo!(),
+            Expression::UnaryNegation { expr: _ } => todo!(),
             Expression::Grouping { expr } => eval_bool(&expr),
             Expression::UnaryNot { expr } => !eval_bool(expr),
             Expression::Logical(LogicalExpression::Greater { left, right }) => {
@@ -456,7 +456,7 @@ mod tests {
                 let y = eval(right.as_ref());
                 return x * y;
             }
-            Expression::Divide { left, right } => todo!(),
+            Expression::Divide { left: _, right: _ } => todo!(),
             Expression::Subtract { left, right } => {
                 let x = eval(left.as_ref());
                 let y = eval(right.as_ref());
