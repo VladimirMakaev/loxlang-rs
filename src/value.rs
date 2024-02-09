@@ -19,8 +19,8 @@ pub enum ObjectType {
 
 #[derive(Clone, Copy)]
 pub struct ObjectValue {
-    ty: ObjectType,
-    object_id: usize,
+    pub ty: ObjectType,
+    pub object_id: usize,
 }
 
 impl Value {
@@ -37,17 +37,6 @@ impl Value {
             Some(*x)
         } else {
             None
-        }
-    }
-}
-
-impl Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Value::Number(x) => write!(f, "{}", x),
-            Value::Bool(x) => write!(f, "{}", x),
-            Value::Nil => f.write_str("nil"),
-            _ => todo!(), //Value::String(x) => write!(f, "{}", x),
         }
     }
 }

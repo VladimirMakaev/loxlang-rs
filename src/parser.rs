@@ -1,6 +1,6 @@
 use std::{iter::Peekable, num::ParseFloatError};
 
-use strum::{EnumIter};
+use strum::EnumIter;
 use thiserror::Error;
 
 use crate::lexer::{Lexer, LexerError, PosIdx, Token, TokenType};
@@ -9,7 +9,7 @@ use crate::lexer::{Lexer, LexerError, PosIdx, Token, TokenType};
 pub enum ParseError {
     #[error("Unexpected token {found:?} at {line}:{span:?}. Expected {expected:?}")]
     UnexpectedToken {
-        expected: TokenType,
+        expected: Vec<TokenType>,
         line: usize,
         span: Span,
         found: TokenType,
@@ -80,8 +80,7 @@ pub enum AstLiteral {
     NumberLiteral(f64),
     NilLiteral,
     BoolLiteral(bool),
-    //StringLiteral(AstString),
-    //FalseLiteral,
+    StringLiteral(String),
 }
 
 pub enum LogicalExpression {
@@ -185,7 +184,7 @@ impl<'source> Parser<'source> {
                     Ok(self.lexer.next().unwrap()?)
                 } else {
                     Err(ParseError::UnexpectedToken {
-                        expected: token_type,
+                        expected: vec![token_type],
                         line: t.line(),
                         span: t.span(),
                         found: t.ty(),
@@ -273,26 +272,42 @@ impl<'source> Parser<'source> {
         match operator.ty() {
             TokenType::BANG_EQUAL => todo!(),
             TokenType::EQUAL_EQUAL => todo!(),
+            TokenType::GREATER_EQUAL => todo!(),
+            TokenType::LESS_EQUAL => todo!(),
             TokenType::GREATER => Ok(Expression::Logical(LogicalExpression::Greater {
                 left: Box::new(left),
                 right: Box::new(right),
             })
             .ast(span)),
-            TokenType::GREATER_EQUAL => todo!(),
             TokenType::LESS => Ok(Expression::Logical(LogicalExpression::Less {
                 left: Box::new(left),
                 right: Box::new(right),
             })
             .ast(span)),
-            TokenType::LESS_EQUAL => todo!(),
             _ => todo!(),
         }
     }
 
-    fn number(&mut self) -> ParseResult {
-        let number = self.consume(TokenType::NUMBER)?;
-        let number_literal = AstLiteral::NumberLiteral(number.slice(self.code).parse::<f64>()?);
-        return Ok(Expression::Literal(number_literal).ast(number.span()));
+    fn literal(&mut self) -> ParseResult {
+        let next = self.consume_next()?;
+        match next.ty() {
+            TokenType::NUMBER => Ok(Expression::Literal(AstLiteral::NumberLiteral(
+                next.slice(self.code).parse::<f64>()?,
+            ))
+            .ast(next.span())),
+            TokenType::STRING => {
+                Ok(Expression::Literal(AstLiteral::StringLiteral(String::from({
+                    &self.code[next.start() + 1..next.end() - 1]
+                })))
+                .ast(next.span()))
+            }
+            _ => Err(ParseError::UnexpectedToken {
+                expected: vec![TokenType::NUMBER, TokenType::STRING],
+                line: next.line(),
+                span: next.span(),
+                found: next.ty(),
+            }),
+        }
     }
 
     fn nil(&mut self) -> ParseResult {
@@ -384,7 +399,8 @@ impl<'source> Parser<'source> {
                 Some(Box::new(Self::binary)),
                 Precedence::MULT,
             ),
-            TokenType::NUMBER => (Some(Box::new(Self::number)), None, Precedence::NONE),
+            TokenType::NUMBER => (Some(Box::new(Self::literal)), None, Precedence::NONE),
+            TokenType::STRING => (Some(Box::new(Self::literal)), None, Precedence::NONE),
             _ => todo!(),
         }
     }
@@ -394,7 +410,7 @@ impl<'source> Parser<'source> {
 mod tests {
     use test_case::test_case;
 
-    use crate::{parser::Expression};
+    use crate::parser::Expression;
 
     use super::{parse, LogicalExpression};
     use super::{AstExpression, AstLiteral};

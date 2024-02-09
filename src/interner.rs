@@ -5,8 +5,10 @@ use std::{
 
 #[derive(PartialEq, Debug)]
 pub struct Key {
-    idx: usize,
+    pub idx: usize,
 }
+
+pub type DefaultInterner = Interner<BuildHasherDefault<DefaultHasher>>;
 
 pub struct Interner<H: BuildHasher> {
     all_strings: Vec<String>,

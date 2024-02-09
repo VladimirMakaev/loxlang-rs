@@ -1,13 +1,21 @@
-use std::{borrow::Cow, collections::HashMap, io::Write, marker::PhantomData, rc::Rc};
+use std::{
+    borrow::Cow,
+    collections::{hash_map::DefaultHasher, HashMap},
+    fmt::{Display, Formatter},
+    hash::BuildHasherDefault,
+    io::Write,
+    marker::PhantomData,
+    rc::Rc,
+};
 
 use thiserror::Error;
 use tracing::debug;
 
 use crate::{
     byte_code::ByteCode,
-    interner::Interner,
+    interner::{DefaultInterner, Interner, Key},
     parser::{parse, AstExpression, LogicalExpression, ParseError},
-    value::{ObjectValue, Value, ValueTypes},
+    value::{ObjectType, ObjectValue, Value, ValueTypes},
 };
 
 #[derive(strum::Display, Debug)]
@@ -26,10 +34,6 @@ pub enum OpCode {
     GREATER,
     LESS,
     Unsupported,
-}
-
-impl OpCode {
-    pub fn write_to(self, _bytes: &mut ByteCode) {}
 }
 
 #[derive(Error, Debug)]
@@ -62,8 +66,7 @@ pub struct VirtualMachine {
     ip: usize,
     stack: Vec<Value>,
     constants: Vec<Value>,
-    all_objects: Vec<ObjectValue>,
-    //all_strings: Interner,
+    interner: DefaultInterner,
 }
 
 impl TryInto<OpCode> for u8 {
@@ -85,7 +88,7 @@ impl VirtualMachine {
             constants: Default::default(),
             ip: 0,
             stack: Default::default(),
-            all_objects: Default::default(),
+            interner: Interner::new(BuildHasherDefault::<DefaultHasher>::default()),
         }
     }
 
@@ -101,12 +104,20 @@ impl VirtualMachine {
         self.run()
     }
 
-    pub fn add_constant(&mut self, v: Value) {
+    fn add_constant(&mut self, v: Value) {
         self.constants.push(v);
     }
 
+    fn add_string(&mut self, val: String) {
+        let key = self.interner.intern_string(val);
+        self.stack.push(Value::Object(ObjectValue {
+            ty: crate::value::ObjectType::String,
+            object_id: key.idx,
+        }));
+    }
+
     fn push(&mut self, v: Value) {
-        debug!("on stack = {}", v);
+        debug!("on stack = {}", self.as_display(v.clone()));
         self.stack.push(v);
     }
 
@@ -156,14 +167,39 @@ impl VirtualMachine {
         while let Ok(op_code) = self.read_byte() {
             match TryInto::<OpCode>::try_into(op_code)? {
                 OpCode::CONSTANT => {
-                    let _idx = self.read_u16()?;
-                    //self.push(self.constants[idx as usize].clone());
+                    let idx = self.read_u16()?;
+                    self.push(self.constants[idx as usize].clone());
                 }
                 OpCode::ADD => {
-                    let left = self.pop_number(OpCode::ADD)?;
-                    let right = self.pop_number(OpCode::ADD)?;
-                    debug!("ADD {} {}", left, right);
-                    self.push((left + right).into());
+                    let right = self.pop()?;
+                    let left = self.pop()?;
+
+                    match (left, right) {
+                        (Value::Number(left), Value::Number(right)) => {
+                            self.push((left + right).into());
+                            debug!("ADD {} {}", left, right);
+                        }
+                        (
+                            Value::Object(ObjectValue {
+                                ty: ObjectType::String,
+                                object_id: ob_id_1,
+                            }),
+                            Value::Object(ObjectValue {
+                                ty: ObjectType::String,
+                                object_id: ob_id_2,
+                            }),
+                        ) => {
+                            let mut contatenate =
+                                String::from(self.interner.get_str(&Key { idx: ob_id_1 }));
+                            contatenate.push_str(self.interner.get_str(&Key { idx: ob_id_2 }));
+                            let result = self.interner.intern_string(contatenate);
+                            self.push(Value::Object(ObjectValue {
+                                ty: ObjectType::String,
+                                object_id: result.idx,
+                            }));
+                        }
+                        (_, _) => todo!(),
+                    }
                 }
                 OpCode::MULTIPLY => {
                     let left = self.pop_number(OpCode::MULTIPLY)?;
@@ -189,7 +225,7 @@ impl VirtualMachine {
                 }
                 OpCode::PRINT => {
                     let param = self.pop()?;
-                    println!("{}", param);
+                    println!("{}", self.as_display(param));
                 }
                 OpCode::TRUE => self.push(true.into()),
                 OpCode::FALSE => self.push(false.into()),
@@ -241,6 +277,9 @@ impl VirtualMachine {
                 bytes.emit_const(self.constants.len(), expr.start());
                 self.add_constant((*num).into());
             }
+            crate::parser::Expression::Literal(crate::parser::AstLiteral::StringLiteral(s)) => {
+                self.add_string(s.clone());
+            }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::BoolLiteral(x)) => {
                 if *x {
                     bytes.emit(OpCode::TRUE, expr.start());
@@ -287,5 +326,29 @@ impl VirtualMachine {
         }
 
         Ok(())
+    }
+
+    fn as_display(&self, value: Value) -> DispayValue {
+        DispayValue { value, vm: self }
+    }
+}
+
+pub struct DispayValue<'a> {
+    vm: &'a VirtualMachine,
+    value: Value,
+}
+
+impl<'a> Display for DispayValue<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.value {
+            Value::Number(x) => write!(f, "{}", x),
+            Value::Bool(x) => write!(f, "{}", x),
+            Value::Nil => f.write_str("nil"),
+            Value::Object(ObjectValue {
+                ty: ObjectType::String,
+                object_id,
+            }) => f.write_str(self.vm.interner.get_str(&Key { idx: object_id })),
+            _ => todo!(),
+        }
     }
 }

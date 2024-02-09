@@ -15,6 +15,6 @@ fn main() -> anyhow::Result<()> {
         .try_init()?;
 
     let mut vm = VirtualMachine::new();
-    vm.interpret("!(10>2)")?;
+    vm.interpret("\"x_\" + \"_1\"")?;
     Ok(())
 }
