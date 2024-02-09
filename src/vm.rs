@@ -320,6 +320,7 @@ impl VirtualMachine {
                 self.compile(&left, bytes)?;
                 bytes.emit(OpCode::LESS, left.start());
             }
+            _ => todo!(),
         }
 
         Ok(())

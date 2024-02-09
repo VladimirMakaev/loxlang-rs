@@ -92,6 +92,22 @@ pub enum LogicalExpression {
         left: Box<AstExpression>,
         right: Box<AstExpression>,
     },
+    Equal {
+        left: Box<AstExpression>,
+        right: Box<AstExpression>,
+    },
+    NotEqual {
+        left: Box<AstExpression>,
+        right: Box<AstExpression>,
+    },
+    And {
+        left: Box<AstExpression>,
+        right: Box<AstExpression>,
+    },
+    Or {
+        left: Box<AstExpression>,
+        right: Box<AstExpression>,
+    },
 }
 
 pub enum Expression {
@@ -270,8 +286,26 @@ impl<'source> Parser<'source> {
         let right = self.parse_by_precedence(Precedence::LOGICAL)?;
         let span = Span::new(left.start(), right.end());
         match operator.ty() {
-            TokenType::BANG_EQUAL => todo!(),
-            TokenType::EQUAL_EQUAL => todo!(),
+            TokenType::BANG_EQUAL => Ok(Expression::Logical(LogicalExpression::NotEqual {
+                left: Box::new(left),
+                right: Box::new(right),
+            })
+            .ast(span)),
+            TokenType::EQUAL_EQUAL => Ok(Expression::Logical(LogicalExpression::Equal {
+                left: Box::new(left),
+                right: Box::new(right),
+            })
+            .ast(span)),
+            TokenType::AND => Ok(Expression::Logical(LogicalExpression::And {
+                left: Box::new(left),
+                right: Box::new(right),
+            })
+            .ast(span)),
+            TokenType::OR => Ok(Expression::Logical(LogicalExpression::Or {
+                left: Box::new(left),
+                right: Box::new(right),
+            })
+            .ast(span)),
             TokenType::GREATER_EQUAL => todo!(),
             TokenType::LESS_EQUAL => todo!(),
             TokenType::GREATER => Ok(Expression::Logical(LogicalExpression::Greater {
@@ -454,6 +488,18 @@ mod tests {
             }
             Expression::Logical(LogicalExpression::Less { left, right }) => {
                 eval(&left) < eval(&right)
+            }
+            Expression::Logical(LogicalExpression::And { left, right }) => {
+                eval_bool(&left) && eval_bool(&right)
+            }
+            Expression::Logical(LogicalExpression::Or { left, right }) => {
+                eval_bool(&left) || eval_bool(&right)
+            }
+            Expression::Logical(LogicalExpression::Equal { left, right }) => {
+                eval(&left) == eval(&right)
+            }
+            Expression::Logical(LogicalExpression::NotEqual { left, right }) => {
+                eval(&left) != eval(&right)
             }
         }
     }
