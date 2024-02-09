@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 #[derive(Clone, strum::EnumDiscriminants)]
 #[strum_discriminants(name(ValueTypes))]
 #[strum_discriminants(derive(strum::Display))]

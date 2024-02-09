@@ -1,11 +1,8 @@
 use std::{
-    borrow::Cow,
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::hash_map::DefaultHasher,
     fmt::{Display, Formatter},
     hash::BuildHasherDefault,
     io::Write,
-    marker::PhantomData,
-    rc::Rc,
 };
 
 use thiserror::Error;

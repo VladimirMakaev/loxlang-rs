@@ -1,6 +1,6 @@
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap},
-    hash::{BuildHasher, BuildHasherDefault, Hash, Hasher},
+    collections::hash_map::DefaultHasher,
+    hash::{BuildHasher, BuildHasherDefault},
 };
 
 #[derive(PartialEq, Debug)]
