@@ -32,6 +32,8 @@ pub enum ParseError {
     UnexpectedUnaryOperator { found: TokenType },
     #[error("Expected boolean literal. Found {found:?}")]
     UnsatisfiedBoolLiteral { found: TokenType },
+    #[error("Invalid identifier expression. Must be constant string")]
+    InvalidExpressionVariableIdentifier,
 }
 
 pub trait Ast: Sized {
@@ -75,6 +77,7 @@ impl<T> Spanned<T> {
 
 pub type AstExpression = Spanned<Expression>;
 pub type AstStmt = Spanned<Stmt>;
+pub type AstIdent = Spanned<String>;
 
 pub enum AstLiteral {
     NumberLiteral(f64),
@@ -111,6 +114,7 @@ pub enum LogicalExpression {
 }
 
 pub enum Expression {
+    Identier(String),
     Literal(AstLiteral),
     Multiply {
         left: Box<AstExpression>,
@@ -142,7 +146,15 @@ pub enum Expression {
 
 pub enum Stmt {
     Print(AstExpression),
+    Declarations(StmtDeclaration),
     Expression(AstExpression),
+}
+
+pub enum StmtDeclaration {
+    Variable {
+        ident: AstIdent,
+        expr: Option<AstExpression>,
+    },
 }
 
 pub fn parse(code: &str) -> Result<Vec<AstStmt>, ParseError> {
@@ -230,7 +242,43 @@ impl<'source> Parser<'source> {
     }
 
     fn declaration(&mut self) -> StmtResult {
+        if self.check_token(TokenType::VAR)? {
+            return self.var_declaration();
+        }
         self.statement()
+    }
+
+    fn var_declaration(&mut self) -> StmtResult {
+        let decl_token = self.consume(TokenType::VAR)?;
+        let var_ident = match self.identifier_contant()? {
+            Spanned {
+                node: Expression::Identier(ident),
+                span,
+            } => Ok(ident.ast(span)),
+            _ => Err(ParseError::InvalidExpressionVariableIdentifier),
+        }?;
+        let mut expr = None;
+        if let Some(_) = self.match_token(TokenType::EQUAL)? {
+            expr = Some(self.expression()?);
+        }
+
+        self.consume(TokenType::SEMICOLON)?;
+
+        let span = Span::new(
+            decl_token.start(),
+            expr.as_ref().map(|e| e.end()).unwrap_or(var_ident.end()),
+        );
+
+        Ok(Stmt::Declarations(StmtDeclaration::Variable {
+            ident: var_ident,
+            expr: expr,
+        })
+        .ast(span))
+    }
+
+    fn identifier_contant(&mut self) -> ExprResult {
+        let ident = self.consume(TokenType::IDENTIFIER)?;
+        Ok(Expression::Identier(ident.slice(self.code).into()).ast(ident.span()))
     }
 
     fn statement(&mut self) -> StmtResult {
@@ -490,6 +538,12 @@ impl<'source> Parser<'source> {
             TokenType::STRING => (Some(Box::new(Self::literal)), None, Precedence::NONE),
             TokenType::PRINT => (None, None, Precedence::NONE),
             TokenType::SEMICOLON => (None, None, Precedence::NONE),
+            TokenType::VAR => (None, None, Precedence::NONE),
+            TokenType::IDENTIFIER => (
+                Some(Box::new(Self::identifier_contant)),
+                None,
+                Precedence::NONE,
+            ),
             _ => todo!(),
         }
     }
@@ -556,6 +610,7 @@ mod tests {
             Expression::Logical(LogicalExpression::NotEqual { left, right }) => {
                 eval(&left) != eval(&right)
             }
+            Expression::Identier(_) => todo!(),
         }
     }
 

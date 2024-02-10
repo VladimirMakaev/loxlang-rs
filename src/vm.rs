@@ -3,8 +3,10 @@ use std::{
     fmt::{Display, Formatter},
     hash::BuildHasherDefault,
     io::Write,
+    process::id,
 };
 
+use hashbrown::HashMap;
 use logos::Span;
 use thiserror::Error;
 use tracing::debug;
@@ -12,7 +14,7 @@ use tracing::debug;
 use crate::{
     byte_code::ByteCode,
     interner::{DefaultInterner, Interner, Key},
-    parser::{parse, AstExpression, AstStmt, LogicalExpression, ParseError},
+    parser::{parse, AstExpression, AstStmt, LogicalExpression, ParseError, StmtDeclaration},
     value::{ObjectType, ObjectValue, Value, ValueTypes},
 };
 
@@ -31,6 +33,8 @@ pub enum OpCode {
     NIL,
     GREATER,
     LESS,
+    GET_GLOBAL,
+    DEFINE_GLOBAL,
     Unsupported,
 }
 
@@ -47,6 +51,8 @@ pub enum VirtualMachineError {
     UnexpectedEndOfByteCode,
     #[error("Expected operand on the stack but none found.")]
     MissingStackOperand,
+    #[error("Global variable {name} is not declared")]
+    UndeclaredVariable { name: String },
     #[error(
         "Instruction {instruction} expected stack operand of type '{expected}'. Got : '{actual}"
     )]
@@ -65,6 +71,7 @@ pub struct VirtualMachine {
     stack: Vec<Value>,
     constants: Vec<Value>,
     interner: DefaultInterner,
+    globals: HashMap<usize, usize>,
 }
 
 impl TryInto<OpCode> for u8 {
@@ -87,6 +94,7 @@ impl VirtualMachine {
             ip: 0,
             stack: Default::default(),
             interner: Interner::new(BuildHasherDefault::<DefaultHasher>::default()),
+            globals: Default::default(),
         }
     }
 
@@ -98,7 +106,7 @@ impl VirtualMachine {
         let smts = parse(code)?;
         let mut byte_code = ByteCode::default();
         for smt in smts.iter() {
-            self.compile_statement(smt, &mut byte_code);
+            self.compile_statement(smt, &mut byte_code)?;
         }
         self.set_bytecode(byte_code);
         self.run()
@@ -242,6 +250,12 @@ impl VirtualMachine {
                     debug!("LESS {} {}", left, right);
                     self.push((left < right).into());
                 }
+                OpCode::DEFINE_GLOBAL => {
+                    todo!()
+                }
+                OpCode::GET_GLOBAL => {
+                    todo!()
+                }
                 OpCode::Unsupported => return Err(VirtualMachineError::InvalidOpCode(op_code)),
             }
         }
@@ -267,14 +281,36 @@ impl VirtualMachine {
         Ok(result)
     }
 
-    pub fn compile_statement(&mut self, stmt: &AstStmt, bytes: &mut ByteCode) {
+    pub fn compile_statement(
+        &mut self,
+        stmt: &AstStmt,
+        bytes: &mut ByteCode,
+    ) -> Result<(), VirtualMachineError> {
         match stmt.node() {
             crate::parser::Stmt::Print(expr) => {
-                self.compile_expr(expr, bytes);
+                self.compile_expr(expr, bytes)?;
                 bytes.emit(OpCode::PRINT, self.lookup_source_line(expr.start()));
+                Ok(())
             }
             crate::parser::Stmt::Expression(expr) => {
-                self.compile_expr(expr, bytes);
+                self.compile_expr(expr, bytes)?;
+                Ok(())
+            }
+            crate::parser::Stmt::Declarations(StmtDeclaration::Variable { ident, expr }) => {
+                if let Some(e) = expr {
+                    self.compile_expr(e, bytes)?;
+                } else {
+                    bytes.emit(OpCode::NIL, self.lookup_source_line(ident.start()));
+                }
+                let (value, idx) = self.make_string_value(ident.node());
+                self.add_constant(value);
+                self.globals.insert(idx, self.constants.len() - 1);
+                self.byte_code.emit_one_u16(
+                    OpCode::DEFINE_GLOBAL,
+                    (self.constants.len() - 1) as u16,
+                    self.lookup_source_line(ident.start()),
+                );
+                Ok(())
             }
         }
     }
@@ -285,6 +321,19 @@ impl VirtualMachine {
         bytes: &mut ByteCode,
     ) -> Result<(), VirtualMachineError> {
         match expr.node() {
+            crate::parser::Expression::Identier(name) => {
+                let name_idx = self.interner.intern_str(name.as_str());
+                let name_idx = self.globals.get(&name_idx.idx).map_or_else(
+                    || Err(VirtualMachineError::UndeclaredVariable { name: name.into() }),
+                    Ok,
+                )?;
+
+                self.byte_code.emit_one_u16(
+                    OpCode::GET_GLOBAL,
+                    *name_idx as u16,
+                    self.lookup_source_line(expr.start()),
+                )
+            }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NumberLiteral(num)) => {
                 bytes.emit_const(self.constants.len(), expr.start());
                 self.add_constant((*num).into());
@@ -335,10 +384,22 @@ impl VirtualMachine {
                 self.compile_expr(&left, bytes)?;
                 bytes.emit(OpCode::LESS, left.start());
             }
+
             _ => todo!(),
         }
 
         Ok(())
+    }
+
+    fn make_string_value(&mut self, val: &str) -> (Value, usize) {
+        let idx = self.interner.intern_str(val).idx;
+        (
+            Value::Object(ObjectValue {
+                ty: ObjectType::String,
+                object_id: idx,
+            }),
+            idx,
+        )
     }
 
     fn as_display(&self, value: Value) -> DispayValue {

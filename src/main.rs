@@ -15,6 +15,11 @@ fn main() -> anyhow::Result<()> {
         .try_init()?;
 
     let mut vm = VirtualMachine::new();
-    vm.interpret("print 5+5;\n print 3*(3+3);")?;
+
+    let code = r#"
+    var var1 = "hello";
+    print var1 + " world";
+"#;
+    vm.interpret(code)?;
     Ok(())
 }

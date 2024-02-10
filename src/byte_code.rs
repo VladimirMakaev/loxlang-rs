@@ -19,6 +19,12 @@ impl ByteCode {
         self.lines.push(line);
     }
 
+    pub fn emit_one_u16(&mut self, op: OpCode, val: impl Into<u16>, line: usize) {
+        self.emit(op, line);
+        self.code.extend((val.into()).to_ne_bytes());
+        self.lines.extend([line, line]);
+    }
+
     pub fn get_byte(&self, ip: usize) -> u8 {
         self.code[ip]
     }
