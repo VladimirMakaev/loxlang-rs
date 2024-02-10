@@ -2,7 +2,6 @@ use std::{iter::Peekable, num::ParseFloatError};
 
 use strum::EnumIter;
 use thiserror::Error;
-use tracing::span;
 
 use crate::lexer::{Lexer, LexerError, PosIdx, Token, TokenType};
 
@@ -590,7 +589,7 @@ mod tests {
 
     use crate::parser::Expression;
 
-    use super::{parse, LogicalExpression};
+    use super::LogicalExpression;
     use super::{AstExpression, AstLiteral};
 
     #[test_case("4", 4.0; "test1")]

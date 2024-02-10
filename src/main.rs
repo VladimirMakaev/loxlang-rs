@@ -1,5 +1,14 @@
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use std::{
+    fs::File,
+    io::{BufReader, Read},
+    path::PathBuf,
+};
+
+use clap::Parser;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use vm::VirtualMachine;
+
+use crate::byte_code::OpCode;
 
 mod byte_code;
 mod interner;
@@ -19,15 +28,24 @@ const UNDECLARED_ASSIGNMENT: &str = r#"
 var1 = "test";
 "#;
 
+#[derive(clap::Parser)]
+struct Opts {
+    file: PathBuf,
+}
+
 fn main() -> anyhow::Result<()> {
+    let opts = Opts::parse();
+
     tracing_subscriber::registry()
         .with(fmt::Layer::default())
-        //.with(EnvFilter::from_default_env())
+        .with(EnvFilter::from_default_env())
         .try_init()?;
 
     let mut vm = VirtualMachine::new();
 
     //vm.interpret(UNDECLARED_ASSIGNMENT)?;
-    vm.interpret(ASSIGNMENT)?;
+    let mut code = String::new();
+    BufReader::new(File::open(opts.file)?).read_to_string(&mut code)?;
+    vm.interpret(code.as_str())?;
     Ok(())
 }

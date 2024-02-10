@@ -3,43 +3,21 @@ use std::{
     fmt::{Display, Formatter},
     hash::BuildHasherDefault,
     io::Write,
-    process::id,
 };
 
 use hashbrown::HashMap;
-use logos::Span;
+
 use thiserror::Error;
-use tracing::debug;
+use tracing::{debug, subscriber};
 
 use crate::{
-    byte_code::ByteCode,
+    byte_code::{ByteCode, OpCode, OpCodeError, OpCodeTypes},
     interner::{DefaultInterner, Interner, Key},
     parser::{
         parse, AstExpression, AstStmt, Expression, LogicalExpression, ParseError, StmtDeclaration,
     },
     value::{ObjectType, ObjectValue, Value, ValueTypes},
 };
-
-#[derive(strum::Display, Debug)]
-#[repr(u8)]
-pub enum OpCode {
-    CONSTANT = 1,
-    ADD,
-    MULTIPLY,
-    SUBTRACT,
-    NEGATE,
-    NOT,
-    PRINT,
-    TRUE,
-    FALSE,
-    NIL,
-    GREATER,
-    LESS,
-    GetGlobal,
-    SetGlobal,
-    DefineGlobal,
-    Unsupported,
-}
 
 #[derive(Error, Debug)]
 pub enum VirtualMachineError {
@@ -48,8 +26,8 @@ pub enum VirtualMachineError {
         #[from]
         source: ParseError,
     },
-    #[error("Invalid op code number '{0}'")]
-    InvalidOpCode(u8),
+    #[error("Opcode error: '{0}'")]
+    OpCodeError(#[from] OpCodeError),
     #[error("Unexpected end of byte code sequence detected")]
     UnexpectedEndOfByteCode,
     #[error("Expected operand on the stack but none found.")]
@@ -60,7 +38,7 @@ pub enum VirtualMachineError {
         "Instruction {instruction} expected stack operand of type '{expected}'. Got : '{actual}"
     )]
     UnexpectedStackOperandType {
-        instruction: OpCode,
+        instruction: OpCodeTypes,
         expected: ValueTypes,
         actual: ValueTypes,
     },
@@ -74,19 +52,7 @@ pub struct VirtualMachine {
     stack: Vec<Value>,
     constants: Vec<Value>,
     interner: DefaultInterner,
-    globals: HashMap<usize, usize>,
-}
-
-impl TryInto<OpCode> for u8 {
-    type Error = VirtualMachineError;
-
-    fn try_into(self) -> Result<OpCode, Self::Error> {
-        if self > OpCode::Unsupported as u8 {
-            Err(VirtualMachineError::InvalidOpCode(self))
-        } else {
-            Ok(unsafe { std::mem::transmute(self) })
-        }
-    }
+    globals: HashMap<usize, Value>,
 }
 
 impl VirtualMachine {
@@ -101,30 +67,22 @@ impl VirtualMachine {
         }
     }
 
-    fn set_bytecode(&mut self, byte_code: ByteCode) {
-        self.byte_code = byte_code;
+    fn compile(&mut self, code: &str) -> Result<(), VirtualMachineError> {
+        let smts = parse(code)?;
+        for smt in smts.iter() {
+            self.compile_statement(smt)?;
+        }
+        Ok(())
     }
 
     pub fn interpret(&mut self, code: &str) -> Result<(), VirtualMachineError> {
-        let smts = parse(code)?;
-        let mut byte_code = ByteCode::default();
-        for smt in smts.iter() {
-            self.compile_statement(smt, &mut byte_code)?;
-        }
-        self.set_bytecode(byte_code);
+        self.compile(code)?;
+        debug!("byte code = \n{}", self.byte_code.decompile(0));
         self.run()
     }
 
     fn add_constant(&mut self, v: Value) {
         self.constants.push(v);
-    }
-
-    fn add_string(&mut self, val: String) {
-        let key = self.interner.intern_string(val);
-        self.stack.push(Value::Object(ObjectValue {
-            ty: crate::value::ObjectType::String,
-            object_id: key.idx,
-        }));
     }
 
     fn push(&mut self, v: Value) {
@@ -138,7 +96,7 @@ impl VirtualMachine {
             .ok_or_else(|| VirtualMachineError::MissingStackOperand)
     }
 
-    fn pop_number(&mut self, op_code: OpCode) -> Result<f64, VirtualMachineError> {
+    fn pop_number(&mut self, op_code: OpCodeTypes) -> Result<f64, VirtualMachineError> {
         let value = self.pop()?;
         Ok(value
             .as_number()
@@ -149,7 +107,7 @@ impl VirtualMachine {
             })?)
     }
 
-    fn pop_bool(&mut self, op_code: OpCode) -> Result<bool, VirtualMachineError> {
+    fn pop_bool(&mut self, op_code: OpCodeTypes) -> Result<bool, VirtualMachineError> {
         let value = self.pop()?;
         Ok(value
             .as_bool()
@@ -160,25 +118,12 @@ impl VirtualMachine {
             })?)
     }
 
-    fn get_or_create_string(&mut self, val: String) -> Value {
-        // if let Some(object_id) = self.all_strings.get(str_val.as_ref()) {
-        //     Value::Object(self.all_objects[*object_id].clone())
-        // } else {
-        //     let object_id = self.all_objects.len();
-        //     let str_val = Rc::new(str_val.into_owned());
-        //     self.all_objects
-        //         .push(StringObject::new_ref(object_id, str_val.clone()));
-
-        //     Value::Object(self.all_objects[object_id].clone())
-        // }
-        todo!()
-    }
-
     fn run(&mut self) -> Result<(), VirtualMachineError> {
-        while let Ok(op_code) = self.read_byte() {
-            match TryInto::<OpCode>::try_into(op_code)? {
-                OpCode::CONSTANT => {
-                    let idx = self.read_u16()?;
+        while let Some(x) = self.byte_code.read_next(self.ip) {
+            let (op_code, size) = x?;
+            self.ip += size;
+            match op_code {
+                OpCode::CONSTANT(idx) => {
                     self.push(self.constants[idx as usize].clone());
                 }
                 OpCode::ADD => {
@@ -213,24 +158,24 @@ impl VirtualMachine {
                     }
                 }
                 OpCode::MULTIPLY => {
-                    let left = self.pop_number(OpCode::MULTIPLY)?;
-                    let right = self.pop_number(OpCode::MULTIPLY)?;
+                    let left = self.pop_number(OpCodeTypes::MULTIPLY)?;
+                    let right = self.pop_number(OpCodeTypes::MULTIPLY)?;
                     debug!("MULTIPLY {} {}", left, right);
                     self.push((left * right).into());
                 }
                 OpCode::SUBTRACT => {
-                    let left = self.pop_number(OpCode::MULTIPLY)?;
-                    let right = self.pop_number(OpCode::MULTIPLY)?;
+                    let left = self.pop_number(OpCodeTypes::MULTIPLY)?;
+                    let right = self.pop_number(OpCodeTypes::MULTIPLY)?;
                     debug!("SUBTRACT {} {}", left, right);
                     self.push((left - right).into());
                 }
                 OpCode::NEGATE => {
-                    let value = self.pop_number(OpCode::NEGATE)?;
+                    let value = self.pop_number(OpCodeTypes::NEGATE)?;
                     debug!("NEGATE {}", value);
                     self.push((-value).into());
                 }
                 OpCode::NOT => {
-                    let value = self.pop_bool(OpCode::NOT)?;
+                    let value = self.pop_bool(OpCodeTypes::NOT)?;
                     debug!("NOT {}", value);
                     self.push((!value).into());
                 }
@@ -242,25 +187,58 @@ impl VirtualMachine {
                 OpCode::FALSE => self.push(false.into()),
                 OpCode::NIL => self.push(Value::Nil),
                 OpCode::GREATER => {
-                    let left = self.pop_number(OpCode::GREATER)?;
-                    let right = self.pop_number(OpCode::GREATER)?;
+                    let left = self.pop_number(OpCodeTypes::GREATER)?;
+                    let right = self.pop_number(OpCodeTypes::GREATER)?;
                     debug!("GREATER {} {}", left, right);
                     self.push((left > right).into());
                 }
                 OpCode::LESS => {
-                    let left = self.pop_number(OpCode::LESS)?;
-                    let right = self.pop_number(OpCode::LESS)?;
+                    let left = self.pop_number(OpCodeTypes::LESS)?;
+                    let right = self.pop_number(OpCodeTypes::LESS)?;
                     debug!("LESS {} {}", left, right);
                     self.push((left < right).into());
                 }
-                OpCode::DefineGlobal => {
-                    todo!()
+                OpCode::DEFINEGLOBAL(name_idx) => {
+                    let init_value = self.pop()?;
+                    debug!(
+                        "DEFINE_GLOBAL {}={}",
+                        self.interner.get_str(&Key {
+                            idx: name_idx as usize
+                        }),
+                        self.as_display(init_value.clone()),
+                    );
+                    self.globals.insert(name_idx as usize, init_value);
                 }
-                OpCode::GetGlobal => {
-                    todo!()
+                OpCode::GETGLOBAL(name_idx) => {
+                    debug!(
+                        "GET_GLOBAL {}",
+                        self.interner.get_str(&Key {
+                            idx: name_idx as usize
+                        })
+                    );
+                    let value = self
+                        .globals
+                        .get(&(name_idx as usize))
+                        .ok_or_else(|| VirtualMachineError::UndeclaredVariable {
+                            name: self
+                                .interner
+                                .get_str(&Key {
+                                    idx: name_idx as usize,
+                                })
+                                .into(),
+                        })?
+                        .clone();
+                    self.push(value);
                 }
-                OpCode::SetGlobal => {}
-                OpCode::Unsupported => return Err(VirtualMachineError::InvalidOpCode(op_code)),
+                OpCode::SETGLOBAL(name_idx) => {
+                    let new_value = self.pop()?;
+                    let name = self.interner.get_str(&Key {
+                        idx: name_idx as usize,
+                    });
+                    debug!("SET_GLOBAL {}={}", name, self.as_display(new_value.clone()));
+                    self.globals.insert(name_idx as usize, new_value.clone());
+                    self.push(new_value);
+                }
             }
         }
 
@@ -280,38 +258,33 @@ impl VirtualMachine {
         if self.ip + 1 >= self.byte_code.size() {
             return Err(VirtualMachineError::UnexpectedEndOfByteCode);
         }
-        let result = self.byte_code.get_u16(self.ip);
+        let result = self.byte_code.read_u16(self.ip);
         self.ip += 2;
         Ok(result)
     }
 
-    pub fn compile_statement(
-        &mut self,
-        stmt: &AstStmt,
-        bytes: &mut ByteCode,
-    ) -> Result<(), VirtualMachineError> {
+    pub fn compile_statement(&mut self, stmt: &AstStmt) -> Result<(), VirtualMachineError> {
         match stmt.node() {
             crate::parser::Stmt::Print(expr) => {
-                self.compile_expr(expr, bytes)?;
-                bytes.emit(OpCode::PRINT, self.lookup_source_line(expr.start()));
+                self.compile_expr(expr)?;
+                self.byte_code
+                    .write_op(OpCode::PRINT, self.lookup_source_line(expr.start()));
                 Ok(())
             }
             crate::parser::Stmt::Expression(expr) => {
-                self.compile_expr(expr, bytes)?;
+                self.compile_expr(expr)?;
                 Ok(())
             }
             crate::parser::Stmt::Declarations(StmtDeclaration::Variable { ident, expr }) => {
                 if let Some(e) = expr {
-                    self.compile_expr(e, bytes)?;
+                    self.compile_expr(e)?;
                 } else {
-                    bytes.emit(OpCode::NIL, self.lookup_source_line(ident.start()));
+                    self.byte_code
+                        .write_op(OpCode::NIL, self.lookup_source_line(ident.start()));
                 }
-                let (value, idx) = self.make_string_value(ident.node());
-                self.add_constant(value);
-                self.globals.insert(idx, self.constants.len() - 1);
-                self.byte_code.emit_one_u16(
-                    OpCode::DefineGlobal,
-                    (self.constants.len() - 1) as u16,
+                let ident_idx = self.interner.intern_str(ident.node()).idx;
+                self.byte_code.write_op(
+                    OpCode::DEFINEGLOBAL((ident_idx) as u16),
                     self.lookup_source_line(ident.start()),
                 );
                 Ok(())
@@ -319,88 +292,80 @@ impl VirtualMachine {
         }
     }
 
-    pub fn compile_expr(
-        &mut self,
-        expr: &AstExpression,
-        bytes: &mut ByteCode,
-    ) -> Result<(), VirtualMachineError> {
+    pub fn compile_expr(&mut self, expr: &AstExpression) -> Result<(), VirtualMachineError> {
         match expr.node() {
             crate::parser::Expression::Assignment { lvalue, rvalue } => {
                 if let Expression::Identier(name) = lvalue.node() {
                     let idx = self.interner.intern_str(&name).idx;
-                    self.compile_expr(rvalue, bytes)?;
-                    let global_idx = self.globals.get(&idx).ok_or_else(|| {
-                        VirtualMachineError::UndeclaredVariable { name: name.into() }
-                    })?;
-                    bytes.emit_one_u16(
-                        OpCode::SetGlobal,
-                        *global_idx as u16,
+                    self.compile_expr(rvalue)?;
+                    self.byte_code.write_op(
+                        OpCode::SETGLOBAL(idx as u16),
                         self.lookup_source_line(expr.start()),
                     );
                 }
             }
             crate::parser::Expression::Identier(name) => {
                 let name_idx = self.interner.intern_str(name.as_str());
-                let name_idx = self.globals.get(&name_idx.idx).map_or_else(
-                    || Err(VirtualMachineError::UndeclaredVariable { name: name.into() }),
-                    Ok,
-                )?;
-
-                self.byte_code.emit_one_u16(
-                    OpCode::GetGlobal,
-                    *name_idx as u16,
+                self.byte_code.write_op(
+                    OpCode::GETGLOBAL(name_idx.idx as u16),
                     self.lookup_source_line(expr.start()),
                 )
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NumberLiteral(num)) => {
-                bytes.emit_const(self.constants.len(), expr.start());
+                self.byte_code
+                    .write_op(OpCode::CONSTANT(self.constants.len() as u16), expr.start());
                 self.add_constant((*num).into());
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::StringLiteral(s)) => {
-                self.add_string(s.clone());
+                let (val, _) = self.interned_str_value(s);
+                self.byte_code.write_op(
+                    OpCode::CONSTANT(self.constants.len() as u16),
+                    self.lookup_source_line(expr.start()),
+                );
+                self.add_constant(val);
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::BoolLiteral(x)) => {
                 if *x {
-                    bytes.emit(OpCode::TRUE, expr.start());
+                    self.byte_code.write_op(OpCode::TRUE, expr.start());
                 } else {
-                    bytes.emit(OpCode::FALSE, expr.start());
+                    self.byte_code.write_op(OpCode::FALSE, expr.start());
                 }
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NilLiteral) => {
-                bytes.emit(OpCode::NIL, expr.start());
+                self.byte_code.write_op(OpCode::NIL, expr.start());
             }
             crate::parser::Expression::Multiply { left, right } => {
-                self.compile_expr(&left.as_ref(), bytes)?;
-                self.compile_expr(&right.as_ref(), bytes)?;
-                bytes.emit(OpCode::MULTIPLY, left.start());
+                self.compile_expr(&left.as_ref())?;
+                self.compile_expr(&right.as_ref())?;
+                self.byte_code.write_op(OpCode::MULTIPLY, left.start());
             }
             crate::parser::Expression::Divide { left: _, right: _ } => todo!(),
             crate::parser::Expression::Add { left, right } => {
-                self.compile_expr(&left.as_ref(), bytes)?;
-                self.compile_expr(&right.as_ref(), bytes)?;
-                bytes.emit(OpCode::ADD, left.start());
+                self.compile_expr(&left.as_ref())?;
+                self.compile_expr(&right.as_ref())?;
+                self.byte_code.write_op(OpCode::ADD, left.start());
             }
             crate::parser::Expression::Subtract { left: _, right: _ } => {}
             crate::parser::Expression::UnaryNegation { expr } => {
-                self.compile_expr(expr.as_ref(), bytes)?;
-                bytes.emit(OpCode::NEGATE, expr.start());
+                self.compile_expr(expr.as_ref())?;
+                self.byte_code.write_op(OpCode::NEGATE, expr.start());
             }
             crate::parser::Expression::Grouping { expr } => {
-                self.compile_expr(&expr, bytes)?;
+                self.compile_expr(&expr)?;
             }
             crate::parser::Expression::UnaryNot { expr } => {
-                self.compile_expr(expr, bytes)?;
-                bytes.emit(OpCode::NOT, expr.start());
+                self.compile_expr(expr)?;
+                self.byte_code.write_op(OpCode::NOT, expr.start());
             }
             crate::parser::Expression::Logical(LogicalExpression::Greater { left, right }) => {
-                self.compile_expr(&right, bytes)?;
-                self.compile_expr(&left, bytes)?;
-                bytes.emit(OpCode::GREATER, left.start());
+                self.compile_expr(&right)?;
+                self.compile_expr(&left)?;
+                self.byte_code.write_op(OpCode::GREATER, left.start());
             }
             crate::parser::Expression::Logical(LogicalExpression::Less { left, right }) => {
-                self.compile_expr(&right, bytes)?;
-                self.compile_expr(&left, bytes)?;
-                bytes.emit(OpCode::LESS, left.start());
+                self.compile_expr(&right)?;
+                self.compile_expr(&left)?;
+                self.byte_code.write_op(OpCode::LESS, left.start());
             }
 
             _ => todo!(),
@@ -409,7 +374,7 @@ impl VirtualMachine {
         Ok(())
     }
 
-    fn make_string_value(&mut self, val: &str) -> (Value, usize) {
+    fn interned_str_value(&mut self, val: &str) -> (Value, usize) {
         let idx = self.interner.intern_str(val).idx;
         (
             Value::Object(ObjectValue {
@@ -446,5 +411,61 @@ impl<'a> Display for DispayValue<'a> {
             }) => f.write_str(self.vm.interner.get_str(&Key { idx: object_id })),
             _ => todo!(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test_case::test_case;
+
+    use crate::byte_code::OpCode;
+
+    use super::VirtualMachine;
+    use pretty_assertions::assert_eq;
+
+    const CODE_1: &str = r###"
+    print 1 + 3;
+    "###;
+    const CODE_2: &str = r###"
+    var x = 1;
+    print(2 + x);
+    "###;
+
+    const CODE_3: &str = r###"
+    var a = 1;
+    var b = 2;
+    var c = 3;
+    a = b = c;
+    "###;
+
+    #[test_case(CODE_1,&[
+        OpCode::CONSTANT(0),
+        OpCode::CONSTANT(1),
+        OpCode::ADD,
+        OpCode::PRINT
+    ])]
+    #[test_case(CODE_2,&[
+        OpCode::CONSTANT(0),
+        OpCode::DEFINEGLOBAL(0),
+        OpCode::CONSTANT(2),
+        OpCode::GETGLOBAL(0),
+        OpCode::ADD,
+        OpCode::PRINT
+    ])]
+    #[test_case(CODE_3,&[
+    ])]
+    fn compile_test1(code: &str, expected: &[OpCode]) -> anyhow::Result<()> {
+        let mut vm = VirtualMachine::new();
+        vm.compile(code)?;
+        let mut decompiler = vm.byte_code.decompile(0);
+        let mut all_instructions = Vec::new();
+
+        while let Some(x) = decompiler.next() {
+            all_instructions.push(x.unwrap());
+        }
+
+        assert_eq!(all_instructions.as_slice(), expected);
+
+        Ok(())
     }
 }
