@@ -195,6 +195,7 @@ mod tests {
     #[test_case("var test = 234.1", &[TokenType::VAR, TokenType::IDENTIFIER, TokenType::EQUAL, TokenType::NUMBER], &["var", "test", "=", "234.1"], &[]; "test 2")]
     #[test_case("var x = \"test\"", &[TokenType::VAR, TokenType::IDENTIFIER, TokenType::EQUAL, TokenType::STRING], &["var", "x", "=", "\"test\""], &[0, 0, 0, 0]; "test3")]
     #[test_case("1\n2+3\n4", &[TokenType::NUMBER, TokenType::NUMBER, TokenType::PLUS, TokenType::NUMBER, TokenType::NUMBER], &["1", "2", "+", "3", "4"], &[0, 1, 1, 1, 2]; "test_multiline")]
+    #[test_case("print 1+2", &[TokenType::PRINT, TokenType::NUMBER, TokenType::PLUS, TokenType::NUMBER], &["print", "1", "+", "2"], &[]; "test print" )]
     pub fn test1(
         str: &str,
         expected_token: &[TokenType],

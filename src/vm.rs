@@ -5,13 +5,14 @@ use std::{
     io::Write,
 };
 
+use logos::Span;
 use thiserror::Error;
 use tracing::debug;
 
 use crate::{
     byte_code::ByteCode,
     interner::{DefaultInterner, Interner, Key},
-    parser::{parse, AstExpression, LogicalExpression, ParseError},
+    parser::{parse, AstExpression, AstStmt, LogicalExpression, ParseError},
     value::{ObjectType, ObjectValue, Value, ValueTypes},
 };
 
@@ -94,9 +95,11 @@ impl VirtualMachine {
     }
 
     pub fn interpret(&mut self, code: &str) -> Result<(), VirtualMachineError> {
-        let expression = parse(code)?;
+        let smts = parse(code)?;
         let mut byte_code = ByteCode::default();
-        self.compile(&expression, &mut byte_code)?;
+        for smt in smts.iter() {
+            self.compile_statement(smt, &mut byte_code);
+        }
         self.set_bytecode(byte_code);
         self.run()
     }
@@ -264,7 +267,19 @@ impl VirtualMachine {
         Ok(result)
     }
 
-    pub fn compile(
+    pub fn compile_statement(&mut self, stmt: &AstStmt, bytes: &mut ByteCode) {
+        match stmt.node() {
+            crate::parser::Stmt::Print(expr) => {
+                self.compile_expr(expr, bytes);
+                bytes.emit(OpCode::PRINT, self.lookup_source_line(expr.start()));
+            }
+            crate::parser::Stmt::Expression(expr) => {
+                self.compile_expr(expr, bytes);
+            }
+        }
+    }
+
+    pub fn compile_expr(
         &mut self,
         expr: &AstExpression,
         bytes: &mut ByteCode,
@@ -288,36 +303,36 @@ impl VirtualMachine {
                 bytes.emit(OpCode::NIL, expr.start());
             }
             crate::parser::Expression::Multiply { left, right } => {
-                self.compile(&left.as_ref(), bytes)?;
-                self.compile(&right.as_ref(), bytes)?;
+                self.compile_expr(&left.as_ref(), bytes)?;
+                self.compile_expr(&right.as_ref(), bytes)?;
                 bytes.emit(OpCode::MULTIPLY, left.start());
             }
             crate::parser::Expression::Divide { left: _, right: _ } => todo!(),
             crate::parser::Expression::Add { left, right } => {
-                self.compile(&left.as_ref(), bytes)?;
-                self.compile(&right.as_ref(), bytes)?;
+                self.compile_expr(&left.as_ref(), bytes)?;
+                self.compile_expr(&right.as_ref(), bytes)?;
                 bytes.emit(OpCode::ADD, left.start());
             }
             crate::parser::Expression::Subtract { left: _, right: _ } => {}
             crate::parser::Expression::UnaryNegation { expr } => {
-                self.compile(expr.as_ref(), bytes)?;
+                self.compile_expr(expr.as_ref(), bytes)?;
                 bytes.emit(OpCode::NEGATE, expr.start());
             }
             crate::parser::Expression::Grouping { expr } => {
-                self.compile(&expr, bytes)?;
+                self.compile_expr(&expr, bytes)?;
             }
             crate::parser::Expression::UnaryNot { expr } => {
-                self.compile(expr, bytes)?;
+                self.compile_expr(expr, bytes)?;
                 bytes.emit(OpCode::NOT, expr.start());
             }
             crate::parser::Expression::Logical(LogicalExpression::Greater { left, right }) => {
-                self.compile(&right, bytes)?;
-                self.compile(&left, bytes)?;
+                self.compile_expr(&right, bytes)?;
+                self.compile_expr(&left, bytes)?;
                 bytes.emit(OpCode::GREATER, left.start());
             }
             crate::parser::Expression::Logical(LogicalExpression::Less { left, right }) => {
-                self.compile(&right, bytes)?;
-                self.compile(&left, bytes)?;
+                self.compile_expr(&right, bytes)?;
+                self.compile_expr(&left, bytes)?;
                 bytes.emit(OpCode::LESS, left.start());
             }
             _ => todo!(),
@@ -328,6 +343,10 @@ impl VirtualMachine {
 
     fn as_display(&self, value: Value) -> DispayValue {
         DispayValue { value, vm: self }
+    }
+
+    fn lookup_source_line(&self, start: usize) -> usize {
+        return start; //todo lookup source table
     }
 }
 
