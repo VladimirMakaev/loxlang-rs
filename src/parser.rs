@@ -2,6 +2,7 @@ use std::{iter::Peekable, num::ParseFloatError};
 
 use strum::EnumIter;
 use thiserror::Error;
+use tracing::span;
 
 use crate::lexer::{Lexer, LexerError, PosIdx, Token, TokenType};
 
@@ -34,6 +35,8 @@ pub enum ParseError {
     UnsatisfiedBoolLiteral { found: TokenType },
     #[error("Invalid identifier expression. Must be constant string")]
     InvalidExpressionVariableIdentifier,
+    #[error("Invalid assignment target")]
+    InvalidAssignmentTarget,
 }
 
 pub trait Ast: Sized {
@@ -114,6 +117,10 @@ pub enum LogicalExpression {
 }
 
 pub enum Expression {
+    Assignment {
+        lvalue: Box<AstExpression>,
+        rvalue: Box<AstExpression>,
+    },
     Identier(String),
     Literal(AstLiteral),
     Multiply {
@@ -188,6 +195,7 @@ type StmtResult = Result<AstStmt, ParseError>;
 enum Precedence {
     NONE = 0,
     LOWEST,
+    ASSIGNMENT,
     LOGICAL,
     SUM,
     MULT,
@@ -285,7 +293,11 @@ impl<'source> Parser<'source> {
         if self.check_token(TokenType::PRINT)? {
             return self.print_statement();
         }
-        todo!()
+
+        let result = self.expression()?;
+        let t = self.consume(TokenType::SEMICOLON)?;
+        let span = Span::new(result.start(), t.end());
+        Ok(Stmt::Expression(result).ast(span))
     }
 
     fn print_statement(&mut self) -> StmtResult {
@@ -493,6 +505,24 @@ impl<'source> Parser<'source> {
         }
     }
 
+    fn assignment(&mut self, left: AstExpression) -> ExprResult {
+        let lvalue = match left {
+            Spanned {
+                node: Expression::Identier(name),
+                span,
+            } => Ok(Expression::Identier(name).ast(span)),
+            _ => Err(ParseError::InvalidAssignmentTarget),
+        }?;
+        self.consume(TokenType::EQUAL)?;
+        let rvalue = self.expression()?;
+        let span = Span::new(lvalue.start(), rvalue.end());
+        Ok(Expression::Assignment {
+            lvalue: Box::new(lvalue),
+            rvalue: Box::new(rvalue),
+        }
+        .ast(span))
+    }
+
     fn precedence(
         token: TokenType,
     ) -> (
@@ -543,6 +573,11 @@ impl<'source> Parser<'source> {
                 Some(Box::new(Self::identifier_contant)),
                 None,
                 Precedence::NONE,
+            ),
+            TokenType::EQUAL => (
+                None,
+                Some(Box::new(Self::assignment)),
+                Precedence::ASSIGNMENT,
             ),
             _ => todo!(),
         }
@@ -611,6 +646,7 @@ mod tests {
                 eval(&left) != eval(&right)
             }
             Expression::Identier(_) => todo!(),
+            Expression::Assignment { lvalue, rvalue } => todo!(),
         }
     }
 

@@ -14,7 +14,9 @@ use tracing::debug;
 use crate::{
     byte_code::ByteCode,
     interner::{DefaultInterner, Interner, Key},
-    parser::{parse, AstExpression, AstStmt, LogicalExpression, ParseError, StmtDeclaration},
+    parser::{
+        parse, AstExpression, AstStmt, Expression, LogicalExpression, ParseError, StmtDeclaration,
+    },
     value::{ObjectType, ObjectValue, Value, ValueTypes},
 };
 
@@ -33,8 +35,9 @@ pub enum OpCode {
     NIL,
     GREATER,
     LESS,
-    GET_GLOBAL,
-    DEFINE_GLOBAL,
+    GetGlobal,
+    SetGlobal,
+    DefineGlobal,
     Unsupported,
 }
 
@@ -250,12 +253,13 @@ impl VirtualMachine {
                     debug!("LESS {} {}", left, right);
                     self.push((left < right).into());
                 }
-                OpCode::DEFINE_GLOBAL => {
+                OpCode::DefineGlobal => {
                     todo!()
                 }
-                OpCode::GET_GLOBAL => {
+                OpCode::GetGlobal => {
                     todo!()
                 }
+                OpCode::SetGlobal => {}
                 OpCode::Unsupported => return Err(VirtualMachineError::InvalidOpCode(op_code)),
             }
         }
@@ -306,7 +310,7 @@ impl VirtualMachine {
                 self.add_constant(value);
                 self.globals.insert(idx, self.constants.len() - 1);
                 self.byte_code.emit_one_u16(
-                    OpCode::DEFINE_GLOBAL,
+                    OpCode::DefineGlobal,
                     (self.constants.len() - 1) as u16,
                     self.lookup_source_line(ident.start()),
                 );
@@ -321,6 +325,20 @@ impl VirtualMachine {
         bytes: &mut ByteCode,
     ) -> Result<(), VirtualMachineError> {
         match expr.node() {
+            crate::parser::Expression::Assignment { lvalue, rvalue } => {
+                if let Expression::Identier(name) = lvalue.node() {
+                    let idx = self.interner.intern_str(&name).idx;
+                    self.compile_expr(rvalue, bytes)?;
+                    let global_idx = self.globals.get(&idx).ok_or_else(|| {
+                        VirtualMachineError::UndeclaredVariable { name: name.into() }
+                    })?;
+                    bytes.emit_one_u16(
+                        OpCode::SetGlobal,
+                        *global_idx as u16,
+                        self.lookup_source_line(expr.start()),
+                    );
+                }
+            }
             crate::parser::Expression::Identier(name) => {
                 let name_idx = self.interner.intern_str(name.as_str());
                 let name_idx = self.globals.get(&name_idx.idx).map_or_else(
@@ -329,7 +347,7 @@ impl VirtualMachine {
                 )?;
 
                 self.byte_code.emit_one_u16(
-                    OpCode::GET_GLOBAL,
+                    OpCode::GetGlobal,
                     *name_idx as u16,
                     self.lookup_source_line(expr.start()),
                 )

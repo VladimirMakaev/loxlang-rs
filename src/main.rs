@@ -8,6 +8,17 @@ mod parser;
 mod value;
 mod vm;
 
+const ASSIGNMENT: &str = r#"
+var var1 = "hello";
+print var1 + " world";
+var1 = "bye-bye";
+print var1;
+"#;
+
+const UNDECLARED_ASSIGNMENT: &str = r#"
+var1 = "test";
+"#;
+
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(fmt::Layer::default())
@@ -16,10 +27,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut vm = VirtualMachine::new();
 
-    let code = r#"
-    var var1 = "hello";
-    print var1 + " world";
-"#;
-    vm.interpret(code)?;
+    //vm.interpret(UNDECLARED_ASSIGNMENT)?;
+    vm.interpret(ASSIGNMENT)?;
     Ok(())
 }
