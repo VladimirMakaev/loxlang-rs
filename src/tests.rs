@@ -1,6 +1,5 @@
 use std::io::{BufRead, BufReader};
 
-use logos::Source;
 use regex::Regex;
 
 use test_case::test_case;

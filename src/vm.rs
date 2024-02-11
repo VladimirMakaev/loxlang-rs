@@ -1,9 +1,8 @@
 use std::{
     collections::hash_map::DefaultHasher,
-    error::Error,
     fmt::{Display, Formatter},
     hash::BuildHasherDefault,
-    io::{Stderr, Stdin, Stdout, Write},
+    io::Write,
 };
 
 use hashbrown::HashMap;
@@ -22,15 +21,12 @@ use crate::{
 
 #[derive(Error, Debug)]
 pub enum VirtualMachineError {
-    #[error("Compile error occured: source {source:?}")]
-    CompileError {
-        #[from]
-        source: ParseError,
-    },
+    #[error("{0}")]
+    CompileError(#[from] ParseError),
     #[error("Opcode error: '{0}'")]
     OpCodeError(#[from] OpCodeError),
     #[error("Unexpected end of byte code sequence detected")]
-    UnexpectedEndOfByteCode,
+    _UnexpectedEndOfByteCode,
     #[error("Expected operand on the stack but none found.")]
     MissingStackOperand,
     #[error("Global variable {name} is not declared")]
@@ -240,24 +236,6 @@ impl VirtualMachine {
         }
 
         Ok(())
-    }
-
-    pub fn read_byte(&mut self) -> Result<u8, VirtualMachineError> {
-        if self.ip >= self.byte_code.size() {
-            return Err(VirtualMachineError::UnexpectedEndOfByteCode);
-        }
-        let result = self.byte_code.get_byte(self.ip);
-        self.ip += 1;
-        Ok(result)
-    }
-
-    pub fn read_u16(&mut self) -> Result<u16, VirtualMachineError> {
-        if self.ip + 1 >= self.byte_code.size() {
-            return Err(VirtualMachineError::UnexpectedEndOfByteCode);
-        }
-        let result = self.byte_code.read_u16(self.ip);
-        self.ip += 2;
-        Ok(result)
     }
 
     pub fn compile_statement(&mut self, stmt: &AstStmt) -> Result<(), VirtualMachineError> {

@@ -58,6 +58,7 @@ impl Span {
     }
 }
 
+#[derive(Debug)]
 pub struct Spanned<TNode> {
     pub(crate) node: TNode,
     pub(crate) span: Span,
@@ -81,6 +82,7 @@ pub type AstExpression = Spanned<Expression>;
 pub type AstStmt = Spanned<Stmt>;
 pub type AstIdent = Spanned<String>;
 
+#[derive(Debug)]
 pub enum AstLiteral {
     NumberLiteral(f64),
     NilLiteral,
@@ -88,6 +90,7 @@ pub enum AstLiteral {
     StringLiteral(String),
 }
 
+#[derive(Debug)]
 pub enum LogicalExpression {
     Greater {
         left: Box<AstExpression>,
@@ -115,6 +118,7 @@ pub enum LogicalExpression {
     },
 }
 
+#[derive(Debug)]
 pub enum Expression {
     Assignment {
         lvalue: Box<AstExpression>,
@@ -150,12 +154,14 @@ pub enum Expression {
     Logical(LogicalExpression),
 }
 
+#[derive(Debug)]
 pub enum Stmt {
     Print(AstExpression),
     Declarations(StmtDeclaration),
     Expression(AstExpression),
 }
 
+#[derive(Debug)]
 pub enum StmtDeclaration {
     Variable {
         ident: AstIdent,
@@ -168,8 +174,8 @@ pub fn parse(code: &str) -> Result<Vec<AstStmt>, ParseError> {
     let mut parser = Parser {
         lexer: lexer.peekable(),
         code: code,
-        had_errors: false,
-        panic_mode: false,
+        _had_errors: false,
+        _panic_mode: false,
     };
 
     let mut result = Vec::new();
@@ -182,8 +188,8 @@ pub fn parse(code: &str) -> Result<Vec<AstStmt>, ParseError> {
 pub struct Parser<'source> {
     code: &'source str,
     lexer: Peekable<Lexer<'source>>,
-    had_errors: bool,
-    panic_mode: bool,
+    _had_errors: bool,
+    _panic_mode: bool,
 }
 
 type ExprResult = Result<AstExpression, ParseError>;
@@ -269,7 +275,7 @@ impl<'source> Parser<'source> {
             expr = Some(self.expression()?);
         }
 
-        self.consume(TokenType::SEMICOLON)?;
+        self.consume(TokenType::Semicolon)?;
 
         let span = Span::new(
             decl_token.start(),
@@ -294,7 +300,7 @@ impl<'source> Parser<'source> {
         }
 
         let result = self.expression()?;
-        let t = self.consume(TokenType::SEMICOLON)?;
+        let t = self.consume(TokenType::Semicolon)?;
         let span = Span::new(result.start(), t.end());
         Ok(Stmt::Expression(result).ast(span))
     }
@@ -303,7 +309,7 @@ impl<'source> Parser<'source> {
         let print_token = self.consume(TokenType::PRINT)?;
         let expr = self.expression()?;
         let span = Span::new(print_token.start(), expr.end());
-        self.consume(TokenType::SEMICOLON)?;
+        self.consume(TokenType::Semicolon)?;
         Ok(Stmt::Print(expr).ast(span))
     }
 
@@ -365,9 +371,9 @@ impl<'source> Parser<'source> {
     }
 
     fn grouping(&mut self) -> ExprResult {
-        let l = self.consume(TokenType::LEFT_PAREN)?;
+        let l = self.consume(TokenType::LeftParen)?;
         let result = self.expression()?;
-        let r = self.consume(TokenType::RIGHT_PAREN)?;
+        let r = self.consume(TokenType::RightParen)?;
         return Ok(Expression::Grouping {
             expr: Box::new(result),
         }
@@ -379,11 +385,11 @@ impl<'source> Parser<'source> {
         let expression = self.parse_by_precedence(Precedence::UNARY)?;
         let span = Span::new(operator.start(), expression.end());
         match operator.ty() {
-            TokenType::MINUS => Ok(Expression::UnaryNegation {
+            TokenType::Minus => Ok(Expression::UnaryNegation {
                 expr: Box::new(expression),
             }
             .ast(span)),
-            TokenType::BANG => Ok(Expression::UnaryNot {
+            TokenType::Bang => Ok(Expression::UnaryNot {
                 expr: Box::new(expression),
             }
             .ast(span)),
@@ -398,12 +404,12 @@ impl<'source> Parser<'source> {
         let right = self.parse_by_precedence(Precedence::LOGICAL)?;
         let span = Span::new(left.start(), right.end());
         match operator.ty() {
-            TokenType::BANG_EQUAL => Ok(Expression::Logical(LogicalExpression::NotEqual {
+            TokenType::BantEqual => Ok(Expression::Logical(LogicalExpression::NotEqual {
                 left: Box::new(left),
                 right: Box::new(right),
             })
             .ast(span)),
-            TokenType::EQUAL_EQUAL => Ok(Expression::Logical(LogicalExpression::Equal {
+            TokenType::EqualEqual => Ok(Expression::Logical(LogicalExpression::Equal {
                 left: Box::new(left),
                 right: Box::new(right),
             })
@@ -418,8 +424,8 @@ impl<'source> Parser<'source> {
                 right: Box::new(right),
             })
             .ast(span)),
-            TokenType::GREATER_EQUAL => todo!(),
-            TokenType::LESS_EQUAL => todo!(),
+            TokenType::GreaterEqual => todo!(),
+            TokenType::LessEqual => todo!(),
             TokenType::GREATER => Ok(Expression::Logical(LogicalExpression::Greater {
                 left: Box::new(left),
                 right: Box::new(right),
@@ -480,7 +486,7 @@ impl<'source> Parser<'source> {
         let right = self.parse_by_precedence(prec.next())?;
         let span = Span::new(left.start(), right.end());
         match operator.ty() {
-            TokenType::MINUS => Ok(Expression::Subtract {
+            TokenType::Minus => Ok(Expression::Subtract {
                 left: Box::new(left),
                 right: Box::new(right),
             }
@@ -490,12 +496,12 @@ impl<'source> Parser<'source> {
                 right: Box::new(right),
             }
             .ast(span)),
-            TokenType::STAR => Ok(Expression::Multiply {
+            TokenType::Star => Ok(Expression::Multiply {
                 left: Box::new(left),
                 right: Box::new(right),
             }
             .ast(span)),
-            TokenType::SLASH => Ok(Expression::Divide {
+            TokenType::Slash => Ok(Expression::Divide {
                 left: Box::new(left),
                 right: Box::new(right),
             }
@@ -530,20 +536,20 @@ impl<'source> Parser<'source> {
         Precedence,
     ) {
         match token {
-            TokenType::LEFT_PAREN => (Some(Box::new(Self::grouping)), None, Precedence::LOWEST),
-            TokenType::RIGHT_PAREN => (None, None, Precedence::NONE),
+            TokenType::LeftParen => (Some(Box::new(Self::grouping)), None, Precedence::LOWEST),
+            TokenType::RightParen => (None, None, Precedence::NONE),
             TokenType::NIL => (Some(Box::new(Self::nil)), None, Precedence::NONE),
-            TokenType::BANG => (Some(Box::new(Self::unary)), None, Precedence::UNARY),
+            TokenType::Bang => (Some(Box::new(Self::unary)), None, Precedence::UNARY),
             TokenType::TRUE | TokenType::FALSE => {
                 (Some(Box::new(Self::bool)), None, Precedence::NONE)
             }
-            TokenType::EQUAL_EQUAL
-            | TokenType::BANG_EQUAL
+            TokenType::EqualEqual
+            | TokenType::BantEqual
             | TokenType::GREATER
-            | TokenType::GREATER_EQUAL
+            | TokenType::GreaterEqual
             | TokenType::LESS
-            | TokenType::LESS_EQUAL => (None, Some(Box::new(Self::logical)), Precedence::LOGICAL),
-            TokenType::MINUS => (
+            | TokenType::LessEqual => (None, Some(Box::new(Self::logical)), Precedence::LOGICAL),
+            TokenType::Minus => (
                 Some(Box::new(Self::unary)),
                 Some(Box::new(Self::binary)),
                 Precedence::SUM,
@@ -553,12 +559,12 @@ impl<'source> Parser<'source> {
                 Some(Box::new(Self::binary)),
                 Precedence::SUM,
             ),
-            TokenType::STAR => (
+            TokenType::Star => (
                 Some(Box::new(Self::unary)),
                 Some(Box::new(Self::binary)),
                 Precedence::MULT,
             ),
-            TokenType::SLASH => (
+            TokenType::Slash => (
                 Some(Box::new(Self::unary)),
                 Some(Box::new(Self::binary)),
                 Precedence::MULT,
@@ -566,7 +572,7 @@ impl<'source> Parser<'source> {
             TokenType::NUMBER => (Some(Box::new(Self::literal)), None, Precedence::NONE),
             TokenType::STRING => (Some(Box::new(Self::literal)), None, Precedence::NONE),
             TokenType::PRINT => (None, None, Precedence::NONE),
-            TokenType::SEMICOLON => (None, None, Precedence::NONE),
+            TokenType::Semicolon => (None, None, Precedence::NONE),
             TokenType::VAR => (None, None, Precedence::NONE),
             TokenType::IDENTIFIER => (
                 Some(Box::new(Self::identifier_contant)),
@@ -585,6 +591,7 @@ impl<'source> Parser<'source> {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::bail;
     use test_case::test_case;
 
     use crate::parser::Expression;
@@ -601,7 +608,7 @@ mod tests {
     #[test_case("2*(2*2+2*(2+3))", 28.0; "test7")]
     #[test_case("-1*2-2", -4.0; "test8")]
     fn test_calculator(code: &str, expected: f64) {
-        //assert_eq!(eval(&parse(code).unwrap()), expected);
+        assert_eq!(eval(&parse_expression(code).unwrap()), expected);
     }
 
     #[test_case("true", true; "bool1")]
@@ -612,9 +619,24 @@ mod tests {
     #[test_case("!(5 > 4*2)", true; "bool6")]
     #[test_case("!(5 < 4*2)", false; "bool7")]
     fn test_booleans(code: &str, expected: bool) {
-        //assert_eq!(eval_bool(&parse(code).unwrap()), expected);
+        assert_eq!(eval_bool(&parse_expression(code).unwrap()), expected);
     }
 
+    fn parse_expression(code: &str) -> anyhow::Result<AstExpression> {
+        let with_semi = if code.ends_with(";") {
+            code.into()
+        } else {
+            String::from(code) + ";"
+        };
+        let mut statements = super::parse(&with_semi).unwrap();
+        let ast = statements.swap_remove(0);
+        match ast.node {
+            super::Stmt::Expression(expr) => Ok(expr),
+            _ => bail!("input should contain single expression"),
+        }
+    }
+
+    #[cfg(test)]
     fn eval_bool(expression: &AstExpression) -> bool {
         match &expression.node {
             Expression::Literal(AstLiteral::BoolLiteral(x)) => *x,
@@ -645,10 +667,11 @@ mod tests {
                 eval(&left) != eval(&right)
             }
             Expression::Identier(_) => todo!(),
-            Expression::Assignment { lvalue, rvalue } => todo!(),
+            Expression::Assignment { .. } => todo!(),
         }
     }
 
+    #[cfg(test)]
     fn eval(expression: &AstExpression) -> f64 {
         match &expression.node {
             Expression::Literal(AstLiteral::NumberLiteral(x)) => *x,

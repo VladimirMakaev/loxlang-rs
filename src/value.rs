@@ -12,7 +12,7 @@ pub enum Value {
 #[derive(Clone, Copy)]
 pub enum ObjectType {
     String,
-    Class,
+    _Class,
 }
 
 #[derive(Clone, Copy)]

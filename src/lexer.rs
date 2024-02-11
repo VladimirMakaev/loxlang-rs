@@ -12,43 +12,43 @@ pub enum TokenType {
     #[regex(r"[ \t\n\f]+", logos::skip)]
     Error,
     #[token("(")]
-    LEFT_PAREN,
+    LeftParen,
     #[token(")")]
-    RIGHT_PAREN,
+    RightParen,
     #[token("{")]
-    LEFT_BRACE,
+    LeftBrace,
     #[token("}")]
-    RIGHT_BRACE,
+    RightBrace,
     #[token(",")]
-    COMMA,
+    Comma,
     #[token(".")]
-    DOT,
+    Dot,
     #[token("-")]
-    MINUS,
+    Minus,
     #[token("+")]
     PLUS,
     #[token(";")]
-    SEMICOLON,
+    Semicolon,
     #[token("\\")]
-    SLASH,
+    Slash,
     #[token("*")]
-    STAR,
+    Star,
     #[token("!")]
-    BANG,
+    Bang,
     #[token("!=")]
-    BANG_EQUAL,
+    BantEqual,
     #[token("=")]
     EQUAL,
     #[token("==")]
-    EQUAL_EQUAL,
+    EqualEqual,
     #[token(">")]
     GREATER,
     #[token(">=")]
-    GREATER_EQUAL,
+    GreaterEqual,
     #[token("<")]
     LESS,
     #[token("<=")]
-    LESS_EQUAL,
+    LessEqual,
     #[regex(r"[a-zA-Z][a-zA-Z0-9]*")]
     IDENTIFIER,
     #[regex("\"[^\"]*\"")]
@@ -89,10 +89,6 @@ pub enum TokenType {
     WHILE,
     #[regex(r"\n", newline_callback)]
     NEWLINE,
-}
-
-fn on_error(_lex: &mut logos::Lexer<TokenType>) -> logos::Skip {
-    Skip
 }
 
 fn newline_callback(lex: &mut logos::Lexer<TokenType>) -> logos::Skip {
@@ -145,7 +141,6 @@ impl Token {
 
 pub struct Lexer<'source> {
     logos_lexer: logos::Lexer<'source, TokenType>,
-    current: Option<Token>,
 }
 
 impl<'source> Iterator for Lexer<'source> {
@@ -160,7 +155,6 @@ impl<'source> Lexer<'source> {
     pub fn new(source: &'source str) -> Self {
         Self {
             logos_lexer: logos::Lexer::new(source),
-            current: None,
         }
     }
 

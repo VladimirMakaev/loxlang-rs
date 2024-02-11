@@ -1,11 +1,11 @@
-use std::{iter::repeat, mem::size_of, process::Output};
+use std::{iter::repeat, mem::size_of};
 
 use byteorder::{ByteOrder, LittleEndian};
 
 #[derive(thiserror::Error, Debug)]
 pub enum OpCodeError {
     #[error("Received incorrect opcode {opcode} that doesn't match any known opcode")]
-    InvalidOpCode { opcode: u8 },
+    _InvalidOpCode { opcode: u8 },
 }
 
 #[derive(Default)]
@@ -17,14 +17,6 @@ pub struct ByteCode {
 impl ByteCode {
     pub fn get_byte(&self, ip: usize) -> u8 {
         self.code[ip]
-    }
-
-    pub fn size(&self) -> usize {
-        self.code.len()
-    }
-
-    pub fn get_u16(&self, ip: usize) -> u16 {
-        u16::from_ne_bytes([self.get_byte(ip), self.get_byte(ip + 1)])
     }
 
     pub fn read_u16(&self, ip: usize) -> u16 {

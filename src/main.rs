@@ -1,14 +1,12 @@
 use std::{
     fs::File,
-    io::{stderr, stdin, stdout, BufReader, Read},
+    io::{stdout, BufReader, Read},
     path::PathBuf,
 };
 
 use clap::Parser;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use vm::VirtualMachine;
-
-use crate::byte_code::OpCode;
 
 mod byte_code;
 mod interner;
@@ -18,17 +16,6 @@ mod parser;
 mod tests;
 mod value;
 mod vm;
-
-const ASSIGNMENT: &str = r#"
-var var1 = "hello";
-print var1 + " world";
-var1 = "bye-bye";
-print var1;
-"#;
-
-const UNDECLARED_ASSIGNMENT: &str = r#"
-var1 = "test";
-"#;
 
 #[derive(clap::Parser)]
 struct Opts {
