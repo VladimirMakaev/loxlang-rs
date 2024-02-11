@@ -1,14 +1,15 @@
 use std::{
     collections::hash_map::DefaultHasher,
+    error::Error,
     fmt::{Display, Formatter},
     hash::BuildHasherDefault,
-    io::Write,
+    io::{Stderr, Stdin, Stdout, Write},
 };
 
 use hashbrown::HashMap;
 
 use thiserror::Error;
-use tracing::{debug, subscriber};
+use tracing::debug;
 
 use crate::{
     byte_code::{ByteCode, OpCode, OpCodeError, OpCodeTypes},
@@ -67,18 +68,12 @@ impl VirtualMachine {
         }
     }
 
-    fn compile(&mut self, code: &str) -> Result<(), VirtualMachineError> {
+    pub fn compile(&mut self, code: &str) -> Result<(), VirtualMachineError> {
         let smts = parse(code)?;
         for smt in smts.iter() {
             self.compile_statement(smt)?;
         }
         Ok(())
-    }
-
-    pub fn interpret(&mut self, code: &str) -> Result<(), VirtualMachineError> {
-        self.compile(code)?;
-        debug!("byte code = \n{}", self.byte_code.decompile(0));
-        self.run()
     }
 
     fn add_constant(&mut self, v: Value) {
@@ -118,7 +113,9 @@ impl VirtualMachine {
             })?)
     }
 
-    fn run(&mut self) -> Result<(), VirtualMachineError> {
+    pub fn run<TOut: Write>(&mut self, stdout: &mut TOut) -> Result<(), VirtualMachineError> {
+        debug!("byte code = \n{}", self.byte_code.decompile(0));
+
         while let Some(x) = self.byte_code.read_next(self.ip) {
             let (op_code, size) = x?;
             self.ip += size;
@@ -181,7 +178,7 @@ impl VirtualMachine {
                 }
                 OpCode::PRINT => {
                     let param = self.pop()?;
-                    println!("{}", self.as_display(param));
+                    writeln!(stdout, "{}", self.as_display(param)).map_err(anyhow::Error::msg)?;
                 }
                 OpCode::TRUE => self.push(true.into()),
                 OpCode::FALSE => self.push(false.into()),

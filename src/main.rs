@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{BufReader, Read},
+    io::{stderr, stdin, stdout, BufReader, Read},
     path::PathBuf,
 };
 
@@ -14,6 +14,8 @@ mod byte_code;
 mod interner;
 mod lexer;
 mod parser;
+#[cfg(test)]
+mod tests;
 mod value;
 mod vm;
 
@@ -41,11 +43,10 @@ fn main() -> anyhow::Result<()> {
         .with(EnvFilter::from_default_env())
         .try_init()?;
 
-    let mut vm = VirtualMachine::new();
-
-    //vm.interpret(UNDECLARED_ASSIGNMENT)?;
     let mut code = String::new();
     BufReader::new(File::open(opts.file)?).read_to_string(&mut code)?;
-    vm.interpret(code.as_str())?;
+    let mut vm = VirtualMachine::new();
+    vm.compile(&code)?;
+    vm.run(&mut stdout())?;
     Ok(())
 }
