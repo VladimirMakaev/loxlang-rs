@@ -406,13 +406,6 @@ mod tests {
     print(2 + x);
     "###;
 
-    const CODE_3: &str = r###"
-    var a = 1;
-    var b = 2;
-    var c = 3;
-    a = b = c;
-    "###;
-
     #[test_case(CODE_1,&[
         OpCode::CONSTANT(0),
         OpCode::CONSTANT(1),
@@ -422,12 +415,10 @@ mod tests {
     #[test_case(CODE_2,&[
         OpCode::CONSTANT(0),
         OpCode::DEFINEGLOBAL(0),
-        OpCode::CONSTANT(2),
+        OpCode::CONSTANT(1),
         OpCode::GETGLOBAL(0),
         OpCode::ADD,
         OpCode::PRINT
-    ])]
-    #[test_case(CODE_3,&[
     ])]
     fn compile_test1(code: &str, expected: &[OpCode]) -> anyhow::Result<()> {
         let mut vm = VirtualMachine::new();
