@@ -32,10 +32,10 @@ pub enum ParseError {
     UnexpectedUnaryOperator { found: TokenType },
     #[error("Expected boolean literal. Found {found:?}")]
     UnsatisfiedBoolLiteral { found: TokenType },
-    #[error("Invalid identifier expression. Must be constant string")]
-    InvalidExpressionVariableIdentifier,
-    #[error("Invalid assignment target")]
-    InvalidAssignmentTarget,
+    #[error("Expect variable name")]
+    InvalidVariableName { span: Span },
+    #[error("Invalid assignment target.")]
+    InvalidAssignmentTarget { span: Span },
 }
 
 pub trait Ast: Sized {
@@ -53,8 +53,16 @@ pub struct Span {
 }
 
 impl Span {
+    pub fn start(&self) -> PosIdx {
+        self.start
+    }
+
     pub fn new(start: PosIdx, end: PosIdx) -> Self {
         Self { start, end }
+    }
+
+    pub fn slice<'a, 'b>(&'a self, code: &'b str) -> &'b str {
+        &code[self.start..self.end]
     }
 }
 
@@ -169,27 +177,10 @@ pub enum StmtDeclaration {
     },
 }
 
-pub fn parse(code: &str) -> Result<Vec<AstStmt>, ParseError> {
-    let lexer = Lexer::new(code);
-    let mut parser = Parser {
-        lexer: lexer.peekable(),
-        code: code,
-        _had_errors: false,
-        _panic_mode: false,
-    };
-
-    let mut result = Vec::new();
-    while let Some(stmt) = parser.next_declaration() {
-        result.push(stmt?);
-    }
-    Ok(result)
-}
-
 pub struct Parser<'source> {
     code: &'source str,
     lexer: Peekable<Lexer<'source>>,
-    _had_errors: bool,
-    _panic_mode: bool,
+    errors: Vec<ParseError>,
 }
 
 type ExprResult = Result<AstExpression, ParseError>;
@@ -226,6 +217,54 @@ impl Into<u8> for Precedence {
 }
 
 impl<'source> Parser<'source> {
+    pub fn had_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+
+    pub fn into_errors(self) -> Vec<ParseError> {
+        self.errors
+    }
+
+    pub fn new(code: &'source str) -> Self {
+        Self {
+            code,
+            lexer: Lexer::new(code).peekable(),
+            errors: Default::default(),
+        }
+    }
+
+    pub fn parse(&mut self) -> Vec<AstStmt> {
+        let mut result = Vec::new();
+        while let Some(next_stmt_result) = self.next_declaration() {
+            match next_stmt_result {
+                Ok(stmt) => result.push(stmt),
+                Err(e) => {
+                    self.errors.push(e);
+                    self.syncronize();
+                }
+            }
+        }
+        result
+    }
+
+    fn syncronize(&mut self) {
+        loop {
+            match self.lexer.next() {
+                Some(Ok(t)) if t.ty() == TokenType::Semicolon => break,
+                Some(Ok(t)) if t.ty() == TokenType::RightBrace => break,
+                Some(Ok(_)) => {
+                    continue;
+                }
+                Some(Err(_)) => {
+                    continue;
+                }
+                None => {
+                    break;
+                }
+            }
+        }
+    }
+
     fn consume(&mut self, token_type: TokenType) -> Result<Token, ParseError> {
         match self.lexer.peek() {
             Some(Ok(t)) => {
@@ -268,7 +307,7 @@ impl<'source> Parser<'source> {
                 node: Expression::Identier(ident),
                 span,
             } => Ok(ident.ast(span)),
-            _ => Err(ParseError::InvalidExpressionVariableIdentifier),
+            Spanned { span, .. } => Err(ParseError::InvalidVariableName { span }),
         }?;
         let mut expr = None;
         if let Some(_) = self.match_token(TokenType::EQUAL)? {
@@ -516,7 +555,7 @@ impl<'source> Parser<'source> {
                 node: Expression::Identier(name),
                 span,
             } => Ok(Expression::Identier(name).ast(span)),
-            _ => Err(ParseError::InvalidAssignmentTarget),
+            _ => Err(ParseError::InvalidAssignmentTarget { span: left.span }),
         }?;
         self.consume(TokenType::EQUAL)?;
         let rvalue = self.expression()?;
@@ -596,8 +635,8 @@ mod tests {
 
     use crate::parser::Expression;
 
-    use super::LogicalExpression;
     use super::{AstExpression, AstLiteral};
+    use super::{LogicalExpression, Parser};
 
     #[test_case("4", 4.0; "test1")]
     #[test_case("4+1", 5.0; "test2")]
@@ -628,7 +667,8 @@ mod tests {
         } else {
             String::from(code) + ";"
         };
-        let mut statements = super::parse(&with_semi).unwrap();
+        let mut parser = Parser::new(&with_semi);
+        let mut statements = parser.parse();
         let ast = statements.swap_remove(0);
         match ast.node {
             super::Stmt::Expression(expr) => Ok(expr),

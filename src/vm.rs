@@ -14,23 +14,23 @@ use crate::{
     byte_code::{ByteCode, OpCode, OpCodeError, OpCodeTypes},
     interner::{DefaultInterner, Interner, Key},
     parser::{
-        parse, AstExpression, AstStmt, Expression, LogicalExpression, ParseError, StmtDeclaration,
+        AstExpression, AstStmt, Expression, LogicalExpression, ParseError, Parser, StmtDeclaration,
     },
     value::{ObjectType, ObjectValue, Value, ValueTypes},
 };
 
 #[derive(Error, Debug)]
 pub enum VirtualMachineError {
-    #[error("{0}")]
-    CompileError(#[from] ParseError),
+    #[error("{0:?}")]
+    CompileError(Vec<ParseError>),
     #[error("Opcode error: '{0}'")]
     OpCodeError(#[from] OpCodeError),
     #[error("Unexpected end of byte code sequence detected")]
     _UnexpectedEndOfByteCode,
     #[error("Expected operand on the stack but none found.")]
     MissingStackOperand,
-    #[error("Global variable {name} is not declared")]
-    UndeclaredVariable { name: String },
+    #[error("Undefined variable '{name}'.")]
+    UndefinedVariable { name: String },
     #[error(
         "Instruction {instruction} expected stack operand of type '{expected}'. Got : '{actual}"
     )]
@@ -65,7 +65,11 @@ impl VirtualMachine {
     }
 
     pub fn compile(&mut self, code: &str) -> Result<(), VirtualMachineError> {
-        let smts = parse(code)?;
+        let mut parser = Parser::new(code);
+        let smts = parser.parse();
+        if parser.had_errors() {
+            return Err(VirtualMachineError::CompileError(parser.into_errors()));
+        }
         for smt in smts.iter() {
             self.compile_statement(smt)?;
         }
@@ -212,7 +216,7 @@ impl VirtualMachine {
                     let value = self
                         .globals
                         .get(&(name_idx as usize))
-                        .ok_or_else(|| VirtualMachineError::UndeclaredVariable {
+                        .ok_or_else(|| VirtualMachineError::UndefinedVariable {
                             name: self
                                 .interner
                                 .get_str(&Key {
@@ -228,7 +232,11 @@ impl VirtualMachine {
                     let name = self.interner.get_str(&Key {
                         idx: name_idx as usize,
                     });
+                    if !self.globals.contains_key(&(name_idx as usize)) {
+                        return Err(VirtualMachineError::UndefinedVariable { name: name.into() });
+                    }
                     debug!("SET_GLOBAL {}={}", name, self.as_display(new_value.clone()));
+
                     self.globals.insert(name_idx as usize, new_value.clone());
                     self.push(new_value);
                 }

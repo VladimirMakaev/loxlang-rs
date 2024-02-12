@@ -1,14 +1,19 @@
 use std::{
+    fmt::Display,
     fs::File,
-    io::{stdout, BufReader, Read},
+    io::{stderr, stdout, BufReader, Read, Write},
     path::PathBuf,
+    process::exit,
 };
 
 use clap::Parser;
+use codemap::Codemap;
+use parser::Span;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use vm::VirtualMachine;
+use vm::{VirtualMachine, VirtualMachineError};
 
 mod byte_code;
+mod codemap;
 mod interner;
 mod lexer;
 mod parser;
@@ -18,12 +23,65 @@ mod value;
 mod vm;
 
 #[derive(clap::Parser)]
-struct Opts {
+struct App {
     file: PathBuf,
 }
 
+impl App {
+    fn report_error_with_span(
+        code: &str,
+        codemap: &Codemap,
+        err_out: &mut impl Write,
+        span: &Span,
+        error: impl Display,
+    ) -> std::io::Result<()> {
+        writeln!(
+            err_out,
+            "{}Error at '{}': {}",
+            {
+                if let Some(line) = codemap.line_at(span.start()) {
+                    format!("[line {}] ", line)
+                } else {
+                    String::from("")
+                }
+            },
+            span.slice(code),
+            error
+        )
+    }
+
+    fn report_errors(
+        &self,
+        code: &str,
+        codemap: &Codemap,
+        err_out: &mut impl Write,
+        vm_err: VirtualMachineError,
+    ) -> std::io::Result<()> {
+        match vm_err {
+            VirtualMachineError::CompileError(parsing_errors) => {
+                for error in parsing_errors.iter() {
+                    match error {
+                        parser::ParseError::UnexpectedToken { span, .. } => {
+                            Self::report_error_with_span(code, codemap, err_out, span, error)?
+                        }
+                        parser::ParseError::InvalidVariableName { span } => {
+                            Self::report_error_with_span(code, codemap, err_out, span, error)?
+                        }
+                        parser::ParseError::InvalidAssignmentTarget { span } => {
+                            Self::report_error_with_span(code, codemap, err_out, span, error)?
+                        }
+                        _ => writeln!(err_out, "{}", error)?,
+                    }
+                }
+            }
+            _ => writeln!(err_out, "{}", vm_err)?,
+        }
+        Ok(())
+    }
+}
+
 fn main() -> anyhow::Result<()> {
-    let opts = Opts::parse();
+    let opts = App::parse();
 
     tracing_subscriber::registry()
         .with(fmt::Layer::default())
@@ -31,9 +89,16 @@ fn main() -> anyhow::Result<()> {
         .try_init()?;
 
     let mut code = String::new();
-    BufReader::new(File::open(opts.file)?).read_to_string(&mut code)?;
+    BufReader::new(File::open(&opts.file)?).read_to_string(&mut code)?;
+    let codemap = Codemap::new(&code);
     let mut vm = VirtualMachine::new();
-    vm.compile(&code)?;
-    vm.run(&mut stdout())?;
+    if let Err(err) = vm.compile(&code) {
+        opts.report_errors(&code, &codemap, &mut stderr(), err)?;
+        exit(65);
+    }
+    if let Err(err) = vm.run(&mut stdout()) {
+        opts.report_errors(&code, &codemap, &mut stderr(), err)?;
+        exit(70);
+    }
     Ok(())
 }
