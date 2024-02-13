@@ -35,15 +35,15 @@ impl ByteCode {
                 *idx = self.read_u16(ip);
                 3
             }
-            Some(OpCode::DEFINEGLOBAL(idx)) => {
+            Some(OpCode::DECLAREGLOBAL(idx)) => {
                 *idx = self.read_u16(ip);
                 3
             }
-            Some(OpCode::SETGLOBAL(idx)) => {
+            Some(OpCode::SETGLOBAL(idx)) | Some(OpCode::GETGLOBAL(idx)) => {
                 *idx = self.read_u16(ip);
                 3
             }
-            Some(OpCode::GETGLOBAL(idx)) => {
+            Some(OpCode::GETLOCAL(idx)) | Some(OpCode::SETLOCAL(idx)) => {
                 *idx = self.read_u16(ip);
                 3
             }
@@ -64,9 +64,9 @@ impl ByteCode {
 
         let bytes_count = match op {
             OpCode::CONSTANT(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::DEFINEGLOBAL(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::GETGLOBAL(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::SETGLOBAL(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::DECLAREGLOBAL(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::GETGLOBAL(idx) | OpCode::SETGLOBAL(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::SETLOCAL(idx) | OpCode::GETLOCAL(idx) => write_one_u16(&mut self.code, idx),
             _ => 0,
         };
         self.lines.extend(repeat(line).take(bytes_count + 1));
@@ -128,7 +128,9 @@ pub enum OpCode {
     CONSTANT(u16),
     GETGLOBAL(u16),
     SETGLOBAL(u16),
-    DEFINEGLOBAL(u16),
+    SETLOCAL(u16),
+    GETLOCAL(u16),
+    DECLAREGLOBAL(u16),
     ADD,
     MULTIPLY,
     SUBTRACT,

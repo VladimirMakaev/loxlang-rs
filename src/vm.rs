@@ -70,8 +70,12 @@ impl VirtualMachine {
         if parser.had_errors() {
             return Err(VirtualMachineError::CompileError(parser.into_errors()));
         }
+        let mut context = LexicalContext {
+            depth: 0,
+            locals: Vec::new(),
+        };
         for smt in smts.iter() {
-            self.compile_statement(smt)?;
+            self.compile_statement(smt, &mut context)?;
         }
         Ok(())
     }
@@ -195,7 +199,7 @@ impl VirtualMachine {
                     debug!("LESS {} {}", left, right);
                     self.push((left < right).into());
                 }
-                OpCode::DEFINEGLOBAL(name_idx) => {
+                OpCode::DECLAREGLOBAL(name_idx) => {
                     let init_value = self.pop()?;
                     debug!(
                         "DEFINE_GLOBAL {}={}",
@@ -240,59 +244,117 @@ impl VirtualMachine {
                     self.globals.insert(name_idx as usize, new_value.clone());
                     self.push(new_value);
                 }
+                OpCode::GETLOCAL(stack_offset) => {
+                    debug!("GET_LOCAL {}", stack_offset);
+                    self.push(self.stack[stack_offset as usize].clone());
+                }
+                OpCode::SETLOCAL(stack_offset) => {
+                    let new_value = self.pop()?;
+                    debug!(
+                        "SET_LOCAL {}={}",
+                        stack_offset,
+                        self.as_display(new_value.clone())
+                    );
+                    if self.stack.len() == stack_offset as usize {
+                        self.push(new_value.clone());
+                    } else {
+                        self.stack[stack_offset as usize] = new_value.clone();
+                        self.push(new_value);
+                    }
+                }
             }
         }
 
         Ok(())
     }
 
-    pub fn compile_statement(&mut self, stmt: &AstStmt) -> Result<(), VirtualMachineError> {
+    pub fn compile_statement<'a>(
+        &mut self,
+        stmt: &'a AstStmt,
+        context: &mut LexicalContext<'a>,
+    ) -> Result<(), VirtualMachineError> {
         match stmt.node() {
             crate::parser::Stmt::Print(expr) => {
-                self.compile_expr(expr)?;
+                self.compile_expr(expr, context)?;
                 self.byte_code
                     .write_op(OpCode::PRINT, self.lookup_source_line(expr.start()));
                 Ok(())
             }
             crate::parser::Stmt::Expression(expr) => {
-                self.compile_expr(expr)?;
+                self.compile_expr(expr, context)?;
                 Ok(())
             }
             crate::parser::Stmt::Declarations(StmtDeclaration::Variable { ident, expr }) => {
                 if let Some(e) = expr {
-                    self.compile_expr(e)?;
+                    self.compile_expr(e, context)?;
                 } else {
                     self.byte_code
                         .write_op(OpCode::NIL, self.lookup_source_line(ident.start()));
                 }
-                let ident_idx = self.interner.intern_str(ident.node()).idx;
-                self.byte_code.write_op(
-                    OpCode::DEFINEGLOBAL((ident_idx) as u16),
-                    self.lookup_source_line(ident.start()),
-                );
+                if context.is_toplevel() {
+                    let ident_idx = self.interner.intern_str(ident.node()).idx;
+                    self.byte_code.write_op(
+                        OpCode::DECLAREGLOBAL((ident_idx) as u16),
+                        self.lookup_source_line(ident.start()),
+                    );
+                } else {
+                    let offset = context.new_local(ident.node());
+                    self.byte_code.write_op(
+                        OpCode::SETLOCAL(offset as u16),
+                        self.lookup_source_line(ident.start()),
+                    )
+                }
+                Ok(())
+            }
+            crate::parser::Stmt::Block(block) => {
+                context.enter_block();
+                for each_stmt in block.iter() {
+                    self.compile_statement(each_stmt, context)?;
+                }
+                context.leave_block();
                 Ok(())
             }
         }
     }
 
-    pub fn compile_expr(&mut self, expr: &AstExpression) -> Result<(), VirtualMachineError> {
+    pub fn compile_expr(
+        &mut self,
+        expr: &AstExpression,
+        context: &mut LexicalContext,
+    ) -> Result<(), VirtualMachineError> {
         match expr.node() {
             crate::parser::Expression::Assignment { lvalue, rvalue } => {
                 if let Expression::Identier(name) = lvalue.node() {
-                    let idx = self.interner.intern_str(&name).idx;
-                    self.compile_expr(rvalue)?;
-                    self.byte_code.write_op(
-                        OpCode::SETGLOBAL(idx as u16),
-                        self.lookup_source_line(expr.start()),
-                    );
+                    self.compile_expr(rvalue, context)?;
+                    if context.is_toplevel() {
+                        let idx = self.interner.intern_str(&name).idx;
+                        self.byte_code.write_op(
+                            OpCode::SETGLOBAL(idx as u16),
+                            self.lookup_source_line(expr.start()),
+                        );
+                    } else {
+                        if let Some(offset) = context.resolve_local(name.as_str()) {
+                            self.byte_code.write_op(
+                                OpCode::SETLOCAL(offset as u16),
+                                self.lookup_source_line(lvalue.start()),
+                            )
+                        }
+                    }
                 }
             }
             crate::parser::Expression::Identier(name) => {
-                let name_idx = self.interner.intern_str(name.as_str());
-                self.byte_code.write_op(
-                    OpCode::GETGLOBAL(name_idx.idx as u16),
-                    self.lookup_source_line(expr.start()),
-                )
+                if let Some(offset) = context.resolve_local(name.as_str()) {
+                    self.byte_code.write_op(
+                        OpCode::GETLOCAL(offset as u16),
+                        self.lookup_source_line(expr.start()),
+                    )
+                } else {
+                    let name_idx = self.interner.intern_str(name.as_str());
+                    self.byte_code.write_op(
+                        OpCode::GETGLOBAL(name_idx.idx as u16),
+                        self.lookup_source_line(expr.start()),
+                    )
+                }
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NumberLiteral(num)) => {
                 self.byte_code
@@ -318,36 +380,36 @@ impl VirtualMachine {
                 self.byte_code.write_op(OpCode::NIL, expr.start());
             }
             crate::parser::Expression::Multiply { left, right } => {
-                self.compile_expr(&left.as_ref())?;
-                self.compile_expr(&right.as_ref())?;
+                self.compile_expr(&left.as_ref(), context)?;
+                self.compile_expr(&right.as_ref(), context)?;
                 self.byte_code.write_op(OpCode::MULTIPLY, left.start());
             }
             crate::parser::Expression::Divide { left: _, right: _ } => todo!(),
             crate::parser::Expression::Add { left, right } => {
-                self.compile_expr(&left.as_ref())?;
-                self.compile_expr(&right.as_ref())?;
+                self.compile_expr(&left.as_ref(), context)?;
+                self.compile_expr(&right.as_ref(), context)?;
                 self.byte_code.write_op(OpCode::ADD, left.start());
             }
             crate::parser::Expression::Subtract { left: _, right: _ } => {}
             crate::parser::Expression::UnaryNegation { expr } => {
-                self.compile_expr(expr.as_ref())?;
+                self.compile_expr(expr.as_ref(), context)?;
                 self.byte_code.write_op(OpCode::NEGATE, expr.start());
             }
             crate::parser::Expression::Grouping { expr } => {
-                self.compile_expr(&expr)?;
+                self.compile_expr(&expr, context)?;
             }
             crate::parser::Expression::UnaryNot { expr } => {
-                self.compile_expr(expr)?;
+                self.compile_expr(expr, context)?;
                 self.byte_code.write_op(OpCode::NOT, expr.start());
             }
             crate::parser::Expression::Logical(LogicalExpression::Greater { left, right }) => {
-                self.compile_expr(&right)?;
-                self.compile_expr(&left)?;
+                self.compile_expr(&right, context)?;
+                self.compile_expr(&left, context)?;
                 self.byte_code.write_op(OpCode::GREATER, left.start());
             }
             crate::parser::Expression::Logical(LogicalExpression::Less { left, right }) => {
-                self.compile_expr(&right)?;
-                self.compile_expr(&left)?;
+                self.compile_expr(&right, context)?;
+                self.compile_expr(&left, context)?;
                 self.byte_code.write_op(OpCode::LESS, left.start());
             }
 
@@ -377,6 +439,50 @@ impl VirtualMachine {
     }
 }
 
+pub struct LexicalContext<'a> {
+    locals: Vec<(&'a str, usize)>,
+    depth: usize,
+}
+
+impl<'a> LexicalContext<'a> {
+    fn is_toplevel(&self) -> bool {
+        self.depth == 0
+    }
+
+    fn enter_block(&mut self) {
+        self.depth += 1;
+    }
+
+    fn leave_block(&mut self) {
+        self.depth -= 1;
+
+        loop {
+            if let Some((_, d)) = self.locals.last() {
+                if *d > self.depth {
+                    self.locals.pop();
+                    continue;
+                }
+            }
+            break;
+        }
+    }
+
+    fn new_local(&mut self, name: &'a str) -> usize {
+        self.locals.push((name, self.depth));
+        self.locals.len() - 1
+    }
+
+    fn resolve_local(&self, name: &str) -> Option<usize> {
+        for i in (0..self.locals.len()).rev() {
+            let (n, _) = self.locals[i];
+            if n.eq(name) {
+                return Some(i);
+            }
+        }
+        None
+    }
+}
+
 pub struct DispayValue<'a> {
     vm: &'a VirtualMachine,
     value: Value,
@@ -403,7 +509,7 @@ mod tests {
 
     use crate::byte_code::OpCode;
 
-    use super::VirtualMachine;
+    use super::{LexicalContext, VirtualMachine};
     use pretty_assertions::assert_eq;
 
     const CODE_1: &str = r###"
@@ -413,6 +519,11 @@ mod tests {
     var x = 1;
     print(2 + x);
     "###;
+    const CODE_3: &str = r###"
+    var x = 1;
+    {
+        var y = 2;
+    }"###;
 
     #[test_case(CODE_1,&[
         OpCode::CONSTANT(0),
@@ -422,11 +533,17 @@ mod tests {
     ])]
     #[test_case(CODE_2,&[
         OpCode::CONSTANT(0),
-        OpCode::DEFINEGLOBAL(0),
+        OpCode::DECLAREGLOBAL(0),
         OpCode::CONSTANT(1),
         OpCode::GETGLOBAL(0),
         OpCode::ADD,
         OpCode::PRINT
+    ])]
+    #[test_case(CODE_3, &[
+        OpCode::CONSTANT(0),
+        OpCode::DECLAREGLOBAL(0),
+        OpCode::CONSTANT(1),
+        OpCode::SETLOCAL(0),
     ])]
     fn compile_test1(code: &str, expected: &[OpCode]) -> anyhow::Result<()> {
         let mut vm = VirtualMachine::new();
@@ -441,5 +558,18 @@ mod tests {
         assert_eq!(all_instructions.as_slice(), expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_var_scope() {
+        let mut scope = LexicalContext {
+            depth: 0,
+            locals: Vec::new(),
+        };
+        scope.new_local("x");
+        scope.enter_block();
+        scope.new_local("y");
+        scope.new_local("x");
+        assert_eq!(Some(2), scope.resolve_local("x"));
     }
 }

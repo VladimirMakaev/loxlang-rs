@@ -1,0 +1,12 @@
+var x = "global";
+{
+    var y = 1;
+    {
+        var z = 2;
+        var y = 20;
+        print y; // expect: 20
+        print z; // expect: 2
+    }
+    y = 4;
+    print 4; // expect: 4
+}

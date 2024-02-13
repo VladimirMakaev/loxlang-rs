@@ -90,7 +90,7 @@ pub type AstExpression = Spanned<Expression>;
 pub type AstStmt = Spanned<Stmt>;
 pub type AstIdent = Spanned<String>;
 
-#[derive(Debug)]
+#[derive(Debug, strum::Display)]
 pub enum AstLiteral {
     NumberLiteral(f64),
     NilLiteral,
@@ -98,7 +98,7 @@ pub enum AstLiteral {
     StringLiteral(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, strum::Display)]
 pub enum LogicalExpression {
     Greater {
         left: Box<AstExpression>,
@@ -126,7 +126,7 @@ pub enum LogicalExpression {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, strum::Display)]
 pub enum Expression {
     Assignment {
         lvalue: Box<AstExpression>,
@@ -162,14 +162,15 @@ pub enum Expression {
     Logical(LogicalExpression),
 }
 
-#[derive(Debug)]
+#[derive(Debug, strum::Display)]
 pub enum Stmt {
     Print(AstExpression),
     Declarations(StmtDeclaration),
+    Block(Vec<AstStmt>),
     Expression(AstExpression),
 }
 
-#[derive(Debug)]
+#[derive(Debug, strum::Display)]
 pub enum StmtDeclaration {
     Variable {
         ident: AstIdent,
@@ -336,6 +337,10 @@ impl<'source> Parser<'source> {
     fn statement(&mut self) -> StmtResult {
         if self.check_token(TokenType::PRINT)? {
             return self.print_statement();
+        }
+
+        if self.check_token(TokenType::LeftBrace)? {
+            return self.block_statement();
         }
 
         let result = self.expression()?;
@@ -567,6 +572,19 @@ impl<'source> Parser<'source> {
         .ast(span))
     }
 
+    fn block_statement(&mut self) -> StmtResult {
+        let left = self.consume(TokenType::LeftBrace)?;
+        let mut statements = Vec::new();
+        while let Some(next) = self.next_declaration() {
+            statements.push(next?);
+            if self.check_token(TokenType::RightBrace)? {
+                break;
+            }
+        }
+        let right = self.consume(TokenType::RightBrace)?;
+        Ok(Stmt::Block(statements).ast(Span::new(left.start(), right.end())))
+    }
+
     fn precedence(
         token: TokenType,
     ) -> (
@@ -623,6 +641,7 @@ impl<'source> Parser<'source> {
                 Some(Box::new(Self::assignment)),
                 Precedence::ASSIGNMENT,
             ),
+            TokenType::LeftBrace | TokenType::RightBrace => (None, None, Precedence::NONE),
             _ => todo!(),
         }
     }

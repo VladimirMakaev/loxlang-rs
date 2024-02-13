@@ -8,10 +8,12 @@ use crate::vm::VirtualMachine;
 
 const ASSIGNMENT_ASSOSIATIVIY: &'static str = include_str!("../tests/assignment/associativity.lox");
 const ASSIGNMENT_GLOBAL: &'static str = include_str!("../tests/assignment/global.lox");
+const ASSIGNMENT_LOCAL: &'static str = include_str!("../tests/assignment/local.lox");
 
 use pretty_assertions::assert_eq;
 #[test_case(ASSIGNMENT_ASSOSIATIVIY)]
 #[test_case(ASSIGNMENT_GLOBAL)]
+#[test_case(ASSIGNMENT_LOCAL)]
 pub fn test_assignment(code: &str) -> anyhow::Result<()> {
     let mut vm = VirtualMachine::new();
     vm.compile(code)?;
@@ -30,7 +32,7 @@ pub fn test_assignment(code: &str) -> anyhow::Result<()> {
 
 fn collect_stdout_expectations(code: &str) -> Vec<String> {
     let mut result = Vec::new();
-    let regex = Regex::new("// expect: ?(.*)").unwrap();
+    let regex = Regex::new("//[ ]*expect: ?(.*)").unwrap();
     for capture in regex.captures_iter(code) {
         if let Some(m) = capture.get(1) {
             //dbg!(m);
