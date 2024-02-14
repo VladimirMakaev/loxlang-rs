@@ -9,6 +9,12 @@ pub enum Value {
     Object(ObjectValue),
 }
 
+impl Value {
+    pub fn ty(&self) -> ValueTypes {
+        ValueTypes::from(self)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum ObjectType {
     String,

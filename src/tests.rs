@@ -15,6 +15,17 @@ use pretty_assertions::assert_eq;
 #[test_case(ASSIGNMENT_GLOBAL)]
 #[test_case(ASSIGNMENT_LOCAL)]
 pub fn test_assignment(code: &str) -> anyhow::Result<()> {
+    verify_code(code)
+}
+
+const CONTROL_FLOW_SIMPLE_IF: &'static str = include_str!("../tests/control_flow/simple_if.lox");
+
+#[test_case(CONTROL_FLOW_SIMPLE_IF)]
+pub fn test_control_flow(code: &str) -> anyhow::Result<()> {
+    verify_code(code)
+}
+
+fn verify_code(code: &str) -> anyhow::Result<()> {
     let mut vm = VirtualMachine::new();
     vm.compile(code)?;
     let mut stdout = Vec::<u8>::new();

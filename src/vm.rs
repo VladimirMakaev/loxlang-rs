@@ -14,7 +14,8 @@ use crate::{
     byte_code::{ByteCode, OpCode, OpCodeError, OpCodeTypes},
     interner::{DefaultInterner, Interner, Key},
     parser::{
-        AstExpression, AstStmt, Expression, LogicalExpression, ParseError, Parser, StmtDeclaration,
+        AstExpression, AstStmt, Expression, IfStmt, LogicalExpression, ParseError, Parser,
+        StmtDeclaration,
     },
     value::{ObjectType, ObjectValue, Value, ValueTypes},
 };
@@ -29,6 +30,7 @@ pub enum VirtualMachineError {
     _UnexpectedEndOfByteCode,
     #[error("Expected operand on the stack but none found.")]
     MissingStackOperand,
+
     #[error("Undefined variable '{name}'.")]
     UndefinedVariable { name: String },
     #[error(
@@ -95,6 +97,13 @@ impl VirtualMachine {
             .ok_or_else(|| VirtualMachineError::MissingStackOperand)
     }
 
+    fn peek(&mut self) -> Result<Value, VirtualMachineError> {
+        self.stack
+            .last()
+            .cloned()
+            .ok_or_else(|| VirtualMachineError::MissingStackOperand)
+    }
+
     fn pop_number(&mut self, op_code: OpCodeTypes) -> Result<f64, VirtualMachineError> {
         let value = self.pop()?;
         Ok(value
@@ -126,6 +135,9 @@ impl VirtualMachine {
             match op_code {
                 OpCode::CONSTANT(idx) => {
                     self.push(self.constants[idx as usize].clone());
+                }
+                OpCode::POP => {
+                    self.pop()?;
                 }
                 OpCode::ADD => {
                     let right = self.pop()?;
@@ -199,6 +211,12 @@ impl VirtualMachine {
                     debug!("LESS {} {}", left, right);
                     self.push((left < right).into());
                 }
+                OpCode::EQUAL => {
+                    let left = self.pop_number(OpCodeTypes::EQUAL)?;
+                    let right = self.pop_number(OpCodeTypes::EQUAL)?;
+                    debug!("EQUAL {} {}", left, right);
+                    self.push((left == right).into());
+                }
                 OpCode::DECLAREGLOBAL(name_idx) => {
                     let init_value = self.pop()?;
                     debug!(
@@ -262,6 +280,23 @@ impl VirtualMachine {
                         self.push(new_value);
                     }
                 }
+                OpCode::JUMPIFFALSE(offset) => {
+                    let val = self.peek()?;
+
+                    let val_bool = val.as_bool().ok_or_else(|| {
+                        VirtualMachineError::UnexpectedStackOperandType {
+                            instruction: op_code.ty(),
+                            expected: ValueTypes::Bool,
+                            actual: val.ty(),
+                        }
+                    })?;
+
+                    debug!("JUMP_IF_FALSE {} cond = {}", offset, val_bool);
+
+                    if !val_bool {
+                        self.ip = ((self.ip as isize) + offset as isize) as usize;
+                    }
+                }
             }
         }
 
@@ -312,6 +347,26 @@ impl VirtualMachine {
                     self.compile_statement(each_stmt, context)?;
                 }
                 context.leave_block();
+                Ok(())
+            }
+            crate::parser::Stmt::If(IfStmt {
+                condition,
+                then_block,
+                _else_block,
+            }) => {
+                self.compile_expr(condition, context)?;
+                let pos = self.byte_code.size(); //
+                self.byte_code.write_op(
+                    OpCode::JUMPIFFALSE(std::i16::MIN),
+                    self.lookup_source_line(stmt.start()),
+                );
+                self.byte_code
+                    .write_op(OpCode::POP, self.lookup_source_line(stmt.start()));
+                self.compile_statement(then_block, context)?;
+                self.byte_code.patch_bytes(
+                    pos + 1,
+                    ((self.byte_code.size() - pos) as i16).to_le_bytes(),
+                );
                 Ok(())
             }
         }
@@ -412,7 +467,12 @@ impl VirtualMachine {
                 self.compile_expr(&left, context)?;
                 self.byte_code.write_op(OpCode::LESS, left.start());
             }
-
+            crate::parser::Expression::Logical(LogicalExpression::Equal { left, right }) => {
+                self.compile_expr(&right, context)?;
+                self.compile_expr(&left, context)?;
+                self.byte_code
+                    .write_op(OpCode::EQUAL, self.lookup_source_line(left.start()));
+            }
             _ => todo!(),
         }
 
@@ -524,6 +584,10 @@ mod tests {
     {
         var y = 2;
     }"###;
+    const CODE_4: &str = r###"
+    if (1 == 1)
+        print 1;
+    "###;
 
     #[test_case(CODE_1,&[
         OpCode::CONSTANT(0),
@@ -544,6 +608,15 @@ mod tests {
         OpCode::DECLAREGLOBAL(0),
         OpCode::CONSTANT(1),
         OpCode::SETLOCAL(0),
+    ])]
+    #[test_case(CODE_4, &[
+        OpCode::CONSTANT(0),
+        OpCode::CONSTANT(1),
+        OpCode::EQUAL,
+        OpCode::JUMPIFFALSE(8),
+        OpCode::POP,
+        OpCode::CONSTANT(2),
+        OpCode::PRINT,
     ])]
     fn compile_test1(code: &str, expected: &[OpCode]) -> anyhow::Result<()> {
         let mut vm = VirtualMachine::new();

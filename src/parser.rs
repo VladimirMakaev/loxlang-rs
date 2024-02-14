@@ -166,8 +166,16 @@ pub enum Expression {
 pub enum Stmt {
     Print(AstExpression),
     Declarations(StmtDeclaration),
+    If(IfStmt),
     Block(Vec<AstStmt>),
     Expression(AstExpression),
+}
+
+#[derive(Debug)]
+pub struct IfStmt {
+    pub(crate) condition: AstExpression,
+    pub(crate) then_block: Box<AstStmt>,
+    pub(crate) _else_block: Option<Box<AstStmt>>,
 }
 
 #[derive(Debug, strum::Display)]
@@ -337,6 +345,10 @@ impl<'source> Parser<'source> {
     fn statement(&mut self) -> StmtResult {
         if self.check_token(TokenType::PRINT)? {
             return self.print_statement();
+        }
+
+        if self.check_token(TokenType::IF)? {
+            return self.if_statement();
         }
 
         if self.check_token(TokenType::LeftBrace)? {
@@ -585,6 +597,32 @@ impl<'source> Parser<'source> {
         Ok(Stmt::Block(statements).ast(Span::new(left.start(), right.end())))
     }
 
+    fn if_statement(&mut self) -> StmtResult {
+        let if_token = self.consume(TokenType::IF)?;
+        self.consume(TokenType::LeftParen)?;
+        let condition = self.expression()?;
+        self.consume(TokenType::RightParen)?;
+
+        let then_block = self.statement()?;
+        let mut else_block = Option::None;
+
+        if self.check_token(TokenType::ELSE)? {
+            else_block = Some(Box::new(self.statement()?));
+        }
+
+        let span = Span::new(
+            if_token.start(),
+            else_block.as_ref().map_or(then_block.end(), |b| b.end()),
+        );
+
+        Ok(Stmt::If(IfStmt {
+            condition: condition,
+            then_block: Box::new(then_block),
+            _else_block: else_block,
+        })
+        .ast(span))
+    }
+
     fn precedence(
         token: TokenType,
     ) -> (
@@ -642,6 +680,7 @@ impl<'source> Parser<'source> {
                 Precedence::ASSIGNMENT,
             ),
             TokenType::LeftBrace | TokenType::RightBrace => (None, None, Precedence::NONE),
+            TokenType::IF | TokenType::ELSE => (None, None, Precedence::NONE),
             _ => todo!(),
         }
     }

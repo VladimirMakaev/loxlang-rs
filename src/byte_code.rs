@@ -15,12 +15,20 @@ pub struct ByteCode {
 }
 
 impl ByteCode {
+    pub fn size(&self) -> usize {
+        self.code.len()
+    }
+
     pub fn get_byte(&self, ip: usize) -> u8 {
         self.code[ip]
     }
 
     pub fn read_u16(&self, ip: usize) -> u16 {
         LittleEndian::read_u16(&self.code[ip..])
+    }
+
+    pub fn read_i16(&self, ip: usize) -> i16 {
+        LittleEndian::read_i16(&self.code[ip..])
     }
 
     pub fn read_next(self: &ByteCode, ip: usize) -> Option<Result<(OpCode, usize), OpCodeError>> {
@@ -47,9 +55,17 @@ impl ByteCode {
                 *idx = self.read_u16(ip);
                 3
             }
+            Some(OpCode::JUMPIFFALSE(offset)) => {
+                *offset = self.read_i16(ip);
+                3
+            }
             _ => 1,
         };
         result.map(|x| Ok((x, size)))
+    }
+
+    pub fn patch_bytes<const N: usize>(&mut self, pos: usize, bytes: [u8; N]) {
+        self.code.splice(pos..pos + N, bytes);
     }
 
     pub fn write_op(&mut self, op: OpCode, line: usize) {
@@ -57,6 +73,12 @@ impl ByteCode {
             let bytes = param.to_le_bytes();
             code.extend(bytes);
             size_of::<u16>()
+        }
+
+        fn write_one_i16(code: &mut Vec<u8>, param: i16) -> usize {
+            let bytes = param.to_le_bytes();
+            code.extend(bytes);
+            size_of::<i16>()
         }
 
         self.code
@@ -67,6 +89,7 @@ impl ByteCode {
             OpCode::DECLAREGLOBAL(idx) => write_one_u16(&mut self.code, idx),
             OpCode::GETGLOBAL(idx) | OpCode::SETGLOBAL(idx) => write_one_u16(&mut self.code, idx),
             OpCode::SETLOCAL(idx) | OpCode::GETLOCAL(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::JUMPIFFALSE(offset) => write_one_i16(&mut self.code, offset),
             _ => 0,
         };
         self.lines.extend(repeat(line).take(bytes_count + 1));
@@ -114,23 +137,18 @@ impl<'a> Iterator for ByteCodeSlice<'a> {
     }
 }
 
-#[derive(
-    Debug,
-    strum::FromRepr,
-    strum::EnumProperty,
-    PartialEq,
-    strum::AsRefStr,
-    strum::EnumDiscriminants,
-)]
-#[strum_discriminants(name(OpCodeTypes), derive(strum::Display))]
+#[derive(Debug, strum::FromRepr, PartialEq, strum::AsRefStr, strum::EnumDiscriminants)]
+#[strum_discriminants(name(OpCodeTypes), derive(strum::Display), derive(strum::FromRepr))]
 #[repr(u8)]
 pub enum OpCode {
-    CONSTANT(u16),
+    CONSTANT(u16) = 1,
     GETGLOBAL(u16),
     SETGLOBAL(u16),
     SETLOCAL(u16),
     GETLOCAL(u16),
     DECLAREGLOBAL(u16),
+    JUMPIFFALSE(i16),
+    POP,
     ADD,
     MULTIPLY,
     SUBTRACT,
@@ -142,6 +160,13 @@ pub enum OpCode {
     NIL,
     GREATER,
     LESS,
+    EQUAL,
+}
+
+impl OpCode {
+    pub fn ty(&self) -> OpCodeTypes {
+        OpCodeTypes::from(self)
+    }
 }
 
 #[cfg(test)]
