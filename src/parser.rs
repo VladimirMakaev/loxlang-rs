@@ -175,7 +175,7 @@ pub enum Stmt {
 pub struct IfStmt {
     pub(crate) condition: AstExpression,
     pub(crate) then_block: Box<AstStmt>,
-    pub(crate) _else_block: Option<Box<AstStmt>>,
+    pub(crate) else_block: Option<Box<AstStmt>>,
 }
 
 #[derive(Debug, strum::Display)]
@@ -607,6 +607,7 @@ impl<'source> Parser<'source> {
         let mut else_block = Option::None;
 
         if self.check_token(TokenType::ELSE)? {
+            self.consume(TokenType::ELSE)?;
             else_block = Some(Box::new(self.statement()?));
         }
 
@@ -618,7 +619,7 @@ impl<'source> Parser<'source> {
         Ok(Stmt::If(IfStmt {
             condition: condition,
             then_block: Box::new(then_block),
-            _else_block: else_block,
+            else_block,
         })
         .ast(span))
     }

@@ -14,6 +14,14 @@ pub struct ByteCode {
     lines: Vec<usize>,
 }
 
+pub struct JumpOffset(i16);
+
+impl JumpOffset {
+    pub fn new(start: usize, end: usize) -> Self {
+        Self((end - start) as i16)
+    }
+}
+
 impl ByteCode {
     pub fn size(&self) -> usize {
         self.code.len()
@@ -55,7 +63,7 @@ impl ByteCode {
                 *idx = self.read_u16(ip);
                 3
             }
-            Some(OpCode::JUMPIFFALSE(offset)) => {
+            Some(OpCode::JUMPIFFALSE(offset)) | Some(OpCode::JUMP(offset)) => {
                 *offset = self.read_i16(ip);
                 3
             }
@@ -66,6 +74,10 @@ impl ByteCode {
 
     pub fn patch_bytes<const N: usize>(&mut self, pos: usize, bytes: [u8; N]) {
         self.code.splice(pos..pos + N, bytes);
+    }
+
+    pub fn patch_offset(&mut self, pos: usize, offset: JumpOffset) {
+        self.patch_bytes(pos, offset.0.to_le_bytes());
     }
 
     pub fn write_op(&mut self, op: OpCode, line: usize) {
@@ -89,7 +101,9 @@ impl ByteCode {
             OpCode::DECLAREGLOBAL(idx) => write_one_u16(&mut self.code, idx),
             OpCode::GETGLOBAL(idx) | OpCode::SETGLOBAL(idx) => write_one_u16(&mut self.code, idx),
             OpCode::SETLOCAL(idx) | OpCode::GETLOCAL(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::JUMPIFFALSE(offset) => write_one_i16(&mut self.code, offset),
+            OpCode::JUMPIFFALSE(offset) | OpCode::JUMP(offset) => {
+                write_one_i16(&mut self.code, offset)
+            }
             _ => 0,
         };
         self.lines.extend(repeat(line).take(bytes_count + 1));
@@ -115,7 +129,7 @@ impl<'a> std::fmt::Display for ByteCodeSlice<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut ip = self.start;
         while let Some(Ok((op, size))) = self.byte_code.read_next(ip) {
-            writeln!(f, "{:?}", op)?;
+            writeln!(f, "@{} {:?}", ip, op)?;
             ip = ip + size;
         }
         Ok(())
@@ -147,6 +161,7 @@ pub enum OpCode {
     SETLOCAL(u16),
     GETLOCAL(u16),
     DECLAREGLOBAL(u16),
+    JUMP(i16),
     JUMPIFFALSE(i16),
     POP,
     ADD,

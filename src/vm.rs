@@ -11,7 +11,7 @@ use thiserror::Error;
 use tracing::debug;
 
 use crate::{
-    byte_code::{ByteCode, OpCode, OpCodeError, OpCodeTypes},
+    byte_code::{ByteCode, JumpOffset, OpCode, OpCodeError, OpCodeTypes},
     interner::{DefaultInterner, Interner, Key},
     parser::{
         AstExpression, AstStmt, Expression, IfStmt, LogicalExpression, ParseError, Parser,
@@ -126,18 +126,24 @@ impl VirtualMachine {
             })?)
     }
 
+    pub fn offset_since(&self, ip: usize) -> JumpOffset {
+        JumpOffset::new(ip, self.byte_code.size())
+    }
+
     pub fn run<TOut: Write>(&mut self, stdout: &mut TOut) -> Result<(), VirtualMachineError> {
         debug!("byte code = \n{}", self.byte_code.decompile(0));
 
         while let Some(x) = self.byte_code.read_next(self.ip) {
             let (op_code, size) = x?;
-            self.ip += size;
             match op_code {
                 OpCode::CONSTANT(idx) => {
-                    self.push(self.constants[idx as usize].clone());
+                    let value = &self.constants[idx as usize].clone();
+                    self.push(value.clone());
+                    debug!("@{} CONSTANT {}", self.ip, self.as_display(value.clone()));
                 }
                 OpCode::POP => {
-                    self.pop()?;
+                    let val = self.pop()?;
+                    debug!("@{} POP {}", self.ip, self.as_display(val));
                 }
                 OpCode::ADD => {
                     let right = self.pop()?;
@@ -146,7 +152,7 @@ impl VirtualMachine {
                     match (left, right) {
                         (Value::Number(left), Value::Number(right)) => {
                             self.push((left + right).into());
-                            debug!("ADD {} {}", left, right);
+                            debug!("@{} ADD {} {}", self.ip, left, right);
                         }
                         (
                             Value::Object(ObjectValue {
@@ -173,28 +179,29 @@ impl VirtualMachine {
                 OpCode::MULTIPLY => {
                     let left = self.pop_number(OpCodeTypes::MULTIPLY)?;
                     let right = self.pop_number(OpCodeTypes::MULTIPLY)?;
-                    debug!("MULTIPLY {} {}", left, right);
+                    debug!("@{} MULTIPLY {} {}", self.ip, left, right);
                     self.push((left * right).into());
                 }
                 OpCode::SUBTRACT => {
                     let left = self.pop_number(OpCodeTypes::MULTIPLY)?;
                     let right = self.pop_number(OpCodeTypes::MULTIPLY)?;
-                    debug!("SUBTRACT {} {}", left, right);
+                    debug!("@{} SUBTRACT {} {}", self.ip, left, right);
                     self.push((left - right).into());
                 }
                 OpCode::NEGATE => {
                     let value = self.pop_number(OpCodeTypes::NEGATE)?;
-                    debug!("NEGATE {}", value);
+                    debug!("@{} NEGATE {}", self.ip, value);
                     self.push((-value).into());
                 }
                 OpCode::NOT => {
                     let value = self.pop_bool(OpCodeTypes::NOT)?;
-                    debug!("NOT {}", value);
+                    debug!("@{} NOT {}", self.ip, value);
                     self.push((!value).into());
                 }
                 OpCode::PRINT => {
-                    let param = self.pop()?;
-                    writeln!(stdout, "{}", self.as_display(param)).map_err(anyhow::Error::msg)?;
+                    let value = self.pop()?;
+                    debug!("@{} PRINT {}", self.ip, self.as_display(value.clone()));
+                    writeln!(stdout, "{}", self.as_display(value)).map_err(anyhow::Error::msg)?;
                 }
                 OpCode::TRUE => self.push(true.into()),
                 OpCode::FALSE => self.push(false.into()),
@@ -202,25 +209,26 @@ impl VirtualMachine {
                 OpCode::GREATER => {
                     let left = self.pop_number(OpCodeTypes::GREATER)?;
                     let right = self.pop_number(OpCodeTypes::GREATER)?;
-                    debug!("GREATER {} {}", left, right);
+                    debug!("@{} GREATER {} {}", self.ip, left, right);
                     self.push((left > right).into());
                 }
                 OpCode::LESS => {
                     let left = self.pop_number(OpCodeTypes::LESS)?;
                     let right = self.pop_number(OpCodeTypes::LESS)?;
-                    debug!("LESS {} {}", left, right);
+                    debug!("@{} LESS {} {}", self.ip, left, right);
                     self.push((left < right).into());
                 }
                 OpCode::EQUAL => {
                     let left = self.pop_number(OpCodeTypes::EQUAL)?;
                     let right = self.pop_number(OpCodeTypes::EQUAL)?;
-                    debug!("EQUAL {} {}", left, right);
+                    debug!("@{} EQUAL {} {}", self.ip, left, right);
                     self.push((left == right).into());
                 }
                 OpCode::DECLAREGLOBAL(name_idx) => {
                     let init_value = self.pop()?;
                     debug!(
-                        "DEFINE_GLOBAL {}={}",
+                        "@{} DEFINE_GLOBAL {}={}",
+                        self.ip,
                         self.interner.get_str(&Key {
                             idx: name_idx as usize
                         }),
@@ -230,7 +238,8 @@ impl VirtualMachine {
                 }
                 OpCode::GETGLOBAL(name_idx) => {
                     debug!(
-                        "GET_GLOBAL {}",
+                        "@{} GET_GLOBAL {}",
+                        self.ip,
                         self.interner.get_str(&Key {
                             idx: name_idx as usize
                         })
@@ -257,19 +266,25 @@ impl VirtualMachine {
                     if !self.globals.contains_key(&(name_idx as usize)) {
                         return Err(VirtualMachineError::UndefinedVariable { name: name.into() });
                     }
-                    debug!("SET_GLOBAL {}={}", name, self.as_display(new_value.clone()));
+                    debug!(
+                        "@{} SETGLOBAL {}={}",
+                        self.ip,
+                        name,
+                        self.as_display(new_value.clone())
+                    );
 
                     self.globals.insert(name_idx as usize, new_value.clone());
                     self.push(new_value);
                 }
                 OpCode::GETLOCAL(stack_offset) => {
-                    debug!("GET_LOCAL {}", stack_offset);
+                    debug!("@{} GETLOCAL {}", self.ip, stack_offset);
                     self.push(self.stack[stack_offset as usize].clone());
                 }
                 OpCode::SETLOCAL(stack_offset) => {
                     let new_value = self.pop()?;
                     debug!(
-                        "SET_LOCAL {}={}",
+                        "@{} SETLOCAL {}={}",
+                        self.ip,
                         stack_offset,
                         self.as_display(new_value.clone())
                     );
@@ -279,6 +294,11 @@ impl VirtualMachine {
                         self.stack[stack_offset as usize] = new_value.clone();
                         self.push(new_value);
                     }
+                }
+                OpCode::JUMP(offset) => {
+                    debug!("@{} JUMP {}", self.ip, offset);
+                    self.ip = ((self.ip as isize) + offset as isize) as usize;
+                    continue;
                 }
                 OpCode::JUMPIFFALSE(offset) => {
                     let val = self.peek()?;
@@ -291,13 +311,15 @@ impl VirtualMachine {
                         }
                     })?;
 
-                    debug!("JUMP_IF_FALSE {} cond = {}", offset, val_bool);
+                    debug!("@{} JUMPIFFALSE {} cond = {}", self.ip, offset, val_bool);
 
                     if !val_bool {
                         self.ip = ((self.ip as isize) + offset as isize) as usize;
+                        continue;
                     }
                 }
             }
+            self.ip += size;
         }
 
         Ok(())
@@ -352,21 +374,44 @@ impl VirtualMachine {
             crate::parser::Stmt::If(IfStmt {
                 condition,
                 then_block,
-                _else_block,
+                else_block,
             }) => {
                 self.compile_expr(condition, context)?;
-                let pos = self.byte_code.size(); //
+                let jump_to_else = self.byte_code.size(); //
+
                 self.byte_code.write_op(
                     OpCode::JUMPIFFALSE(std::i16::MIN),
                     self.lookup_source_line(stmt.start()),
                 );
+
                 self.byte_code
                     .write_op(OpCode::POP, self.lookup_source_line(stmt.start()));
+
                 self.compile_statement(then_block, context)?;
-                self.byte_code.patch_bytes(
-                    pos + 1,
-                    ((self.byte_code.size() - pos) as i16).to_le_bytes(),
-                );
+
+                if let Some(else_block) = else_block {
+                    let jump_after_then = self.byte_code.size();
+
+                    self.byte_code.write_op(
+                        OpCode::JUMP(std::i16::MIN),
+                        self.lookup_source_line(stmt.start()),
+                    );
+
+                    self.byte_code
+                        .patch_offset(jump_to_else + 1, self.offset_since(jump_to_else));
+
+                    self.byte_code
+                        .write_op(OpCode::POP, self.lookup_source_line(stmt.start()));
+
+                    self.compile_statement(else_block, context)?;
+
+                    self.byte_code
+                        .patch_offset(jump_after_then + 1, self.offset_since(jump_after_then));
+                } else {
+                    self.byte_code
+                        .patch_offset(jump_to_else + 1, self.offset_since(jump_to_else));
+                }
+
                 Ok(())
             }
         }
@@ -587,7 +632,7 @@ mod tests {
     const CODE_4: &str = r###"
     if (1 == 1)
         print 1;
-    "###;
+        "###;
 
     #[test_case(CODE_1,&[
         OpCode::CONSTANT(0),
