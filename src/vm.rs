@@ -510,6 +510,7 @@ impl VirtualMachine {
                 self.byte_code
                     .write_op(OpCode::EQUAL, self.lookup_source_line(left.start()));
             }
+
             crate::parser::Expression::Logical(LogicalExpression::And { left, right }) => {
                 self.compile_expr(&left, context)?;
                 let pos_after_left = self.byte_code.size();
@@ -521,6 +522,23 @@ impl VirtualMachine {
                 self.byte_code
                     .patch_offset(pos_after_left + 1, self.offset_since(pos_after_left))
             }
+            crate::parser::Expression::Logical(LogicalExpression::Or { left, right }) => {
+                self.compile_expr(&left, context)?;
+
+                self.byte_code.write_op(
+                    OpCode::JUMPIFFALSE(6), // JUMPIFFALSE + JUMP
+                    self.lookup_source_line(left.start()),
+                );
+                let jump_out = self.byte_code.size();
+                self.byte_code.write_op(
+                    OpCode::JUMP(i16::MAX),
+                    self.lookup_source_line(left.start()),
+                );
+                self.compile_expr(&right, context)?;
+                self.byte_code
+                    .patch_offset(jump_out + 1, self.offset_since(jump_out));
+            }
+
             _ => todo!(),
         }
 

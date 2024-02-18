@@ -468,6 +468,17 @@ impl<'source> Parser<'source> {
         .ast(span))
     }
 
+    fn logical_or(&mut self, left: AstExpression) -> ExprResult {
+        let _ = self.consume(TokenType::OR)?;
+        let right = self.parse_by_precedence(Precedence::OR)?;
+        let span = Span::new(left.start(), right.end());
+        Ok(Expression::Logical(LogicalExpression::Or {
+            left: Box::new(left),
+            right: Box::new(right),
+        })
+        .ast(span))
+    }
+
     fn logical(&mut self, left: AstExpression) -> ExprResult {
         let operator = self.consume_next()?;
         let right = self.parse_by_precedence(Precedence::COMPARISON)?;
@@ -693,6 +704,7 @@ impl<'source> Parser<'source> {
             TokenType::LeftBrace | TokenType::RightBrace => (None, None, Precedence::NONE),
             TokenType::IF | TokenType::ELSE => (None, None, Precedence::NONE),
             TokenType::AND => (None, Some(Box::new(Self::logical_and)), Precedence::AND),
+            TokenType::OR => (None, Some(Box::new(Self::logical_or)), Precedence::AND),
             _ => todo!(),
         }
     }
