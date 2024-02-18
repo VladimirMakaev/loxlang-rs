@@ -14,8 +14,8 @@ pub enum ParseError {
         span: Span,
         found: TokenType,
     },
-    #[error("Expected token {expected:?} but reached eof")]
-    UnexpectedEof { expected: Option<TokenType> },
+    #[error("Unexpected end of file")]
+    UnexpectedEof,
     #[error("Number literal can't be converted to number")]
     InvalidNumberLiteral {
         #[from]
@@ -26,8 +26,8 @@ pub enum ParseError {
         #[from]
         source: LexerError,
     },
-    #[error("Expected expression")]
-    ExpectedExpression,
+    #[error("Expect expression.")]
+    ExpectedExpression { span: Span },
     #[error("Expected unary operator. Found {found:?}")]
     UnexpectedUnaryOperator { found: TokenType },
     #[error("Expected boolean literal. Found {found:?}")]
@@ -289,9 +289,7 @@ impl<'source> Parser<'source> {
                 }
             }
             Some(Err(_)) => Ok(self.lexer.next().unwrap()?),
-            None => Err(ParseError::UnexpectedEof {
-                expected: Some(token_type),
-            }),
+            None => Err(ParseError::UnexpectedEof),
         }
     }
 
@@ -392,7 +390,7 @@ impl<'source> Parser<'source> {
         if let Some(t) = self.lexer.next() {
             Ok(t?)
         } else {
-            Err(ParseError::UnexpectedEof { expected: None })
+            Err(ParseError::UnexpectedEof)
         }
     }
 
@@ -419,11 +417,13 @@ impl<'source> Parser<'source> {
                         break;
                     }
                 }
-
                 return Ok(result);
+            } else {
+                return Err(ParseError::ExpectedExpression { span: token.span() });
             }
+        } else {
+            return Err(ParseError::UnexpectedEof);
         }
-        return Err(ParseError::ExpectedExpression);
     }
 
     fn grouping(&mut self) -> ExprResult {

@@ -70,6 +70,9 @@ impl App {
                         parser::ParseError::InvalidAssignmentTarget { span } => {
                             Self::report_error_with_span(code, codemap, err_out, span, error)?
                         }
+                        parser::ParseError::ExpectedExpression { span } => {
+                            Self::report_error_with_span(code, codemap, err_out, span, error)?
+                        }
                         _ => writeln!(err_out, "{}", error)?,
                     }
                 }
