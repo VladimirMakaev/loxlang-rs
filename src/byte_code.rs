@@ -178,12 +178,6 @@ pub enum OpCode {
     EQUAL,
 }
 
-impl OpCode {
-    pub fn ty(&self) -> OpCodeTypes {
-        OpCodeTypes::from(self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::byte_code::OpCode;

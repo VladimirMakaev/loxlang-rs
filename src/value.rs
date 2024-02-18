@@ -9,12 +9,6 @@ pub enum Value {
     Object(ObjectValue),
 }
 
-impl Value {
-    pub fn ty(&self) -> ValueTypes {
-        ValueTypes::from(self)
-    }
-}
-
 #[derive(Clone, Copy)]
 pub enum ObjectType {
     String,
@@ -30,14 +24,6 @@ pub struct ObjectValue {
 impl Value {
     pub fn as_number(&self) -> Option<f64> {
         if let Value::Number(x) = self {
-            Some(*x)
-        } else {
-            None
-        }
-    }
-
-    pub fn as_bool(&self) -> Option<bool> {
-        if let Value::Bool(x) = self {
             Some(*x)
         } else {
             None

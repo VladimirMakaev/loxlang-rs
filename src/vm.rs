@@ -115,15 +115,13 @@ impl VirtualMachine {
             })?)
     }
 
-    fn pop_bool(&mut self, op_code: OpCodeTypes) -> Result<bool, VirtualMachineError> {
-        let value = self.pop()?;
-        Ok(value
-            .as_bool()
-            .ok_or_else(|| VirtualMachineError::UnexpectedStackOperandType {
-                instruction: op_code,
-                expected: ValueTypes::Bool,
-                actual: value.into(),
-            })?)
+    fn is_truthy(&self, value: &Value) -> bool {
+        match value {
+            Value::Number(_x) => true,
+            Value::Bool(x) => *x,
+            Value::Nil => false,
+            Value::Object(_) => true,
+        }
     }
 
     pub fn offset_since(&self, ip: usize) -> JumpOffset {
@@ -194,9 +192,9 @@ impl VirtualMachine {
                     self.push((-value).into());
                 }
                 OpCode::NOT => {
-                    let value = self.pop_bool(OpCodeTypes::NOT)?;
-                    debug!("@{} NOT {}", self.ip, value);
-                    self.push((!value).into());
+                    let value = self.pop()?;
+                    debug!("@{} NOT {}", self.ip, self.is_truthy(&value));
+                    self.push(self.is_truthy(&value).into());
                 }
                 OpCode::PRINT => {
                     let value = self.pop()?;
@@ -303,13 +301,7 @@ impl VirtualMachine {
                 OpCode::JUMPIFFALSE(offset) => {
                     let val = self.peek()?;
 
-                    let val_bool = val.as_bool().ok_or_else(|| {
-                        VirtualMachineError::UnexpectedStackOperandType {
-                            instruction: op_code.ty(),
-                            expected: ValueTypes::Bool,
-                            actual: val.ty(),
-                        }
-                    })?;
+                    let val_bool = self.is_truthy(&val);
 
                     debug!("@{} JUMPIFFALSE {} cond = {}", self.ip, offset, val_bool);
 
