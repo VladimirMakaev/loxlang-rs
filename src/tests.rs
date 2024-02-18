@@ -27,6 +27,13 @@ pub fn test_control_flow(code: &str) -> anyhow::Result<()> {
     verify_code(code)
 }
 
+const BLOCK_EMPTY: &'static str = include_str!("../tests/block/empty.lox");
+
+#[test_case(BLOCK_EMPTY)]
+pub fn test_block(code: &str) -> anyhow::Result<()> {
+    verify_code(code)
+}
+
 fn verify_code(code: &str) -> anyhow::Result<()> {
     let mut vm = VirtualMachine::new();
     vm.compile(code)?;

@@ -587,10 +587,12 @@ impl<'source> Parser<'source> {
     fn block_statement(&mut self) -> StmtResult {
         let left = self.consume(TokenType::LeftBrace)?;
         let mut statements = Vec::new();
-        while let Some(next) = self.next_declaration() {
-            statements.push(next?);
-            if self.check_token(TokenType::RightBrace)? {
-                break;
+        if !self.check_token(TokenType::RightBrace)? {
+            while let Some(next) = self.next_declaration() {
+                statements.push(next?);
+                if self.check_token(TokenType::RightBrace)? {
+                    break;
+                }
             }
         }
         let right = self.consume(TokenType::RightBrace)?;
