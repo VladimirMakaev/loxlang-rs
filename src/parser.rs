@@ -201,7 +201,9 @@ enum Precedence {
     NONE = 0,
     LOWEST,
     ASSIGNMENT,
-    LOGICAL,
+    OR,
+    AND,
+    COMPARISON,
     SUM,
     MULT,
     UNARY,
@@ -455,9 +457,20 @@ impl<'source> Parser<'source> {
         }
     }
 
+    fn logical_and(&mut self, left: AstExpression) -> ExprResult {
+        let _ = self.consume(TokenType::AND)?;
+        let right = self.parse_by_precedence(Precedence::AND)?;
+        let span = Span::new(left.start(), right.end());
+        Ok(Expression::Logical(LogicalExpression::And {
+            left: Box::new(left),
+            right: Box::new(right),
+        })
+        .ast(span))
+    }
+
     fn logical(&mut self, left: AstExpression) -> ExprResult {
         let operator = self.consume_next()?;
-        let right = self.parse_by_precedence(Precedence::LOGICAL)?;
+        let right = self.parse_by_precedence(Precedence::COMPARISON)?;
         let span = Span::new(left.start(), right.end());
         match operator.ty() {
             TokenType::BantEqual => Ok(Expression::Logical(LogicalExpression::NotEqual {
@@ -466,11 +479,6 @@ impl<'source> Parser<'source> {
             })
             .ast(span)),
             TokenType::EqualEqual => Ok(Expression::Logical(LogicalExpression::Equal {
-                left: Box::new(left),
-                right: Box::new(right),
-            })
-            .ast(span)),
-            TokenType::AND => Ok(Expression::Logical(LogicalExpression::And {
                 left: Box::new(left),
                 right: Box::new(right),
             })
@@ -646,7 +654,7 @@ impl<'source> Parser<'source> {
             | TokenType::GREATER
             | TokenType::GreaterEqual
             | TokenType::LESS
-            | TokenType::LessEqual => (None, Some(Box::new(Self::logical)), Precedence::LOGICAL),
+            | TokenType::LessEqual => (None, Some(Box::new(Self::logical)), Precedence::COMPARISON),
             TokenType::Minus => (
                 Some(Box::new(Self::unary)),
                 Some(Box::new(Self::binary)),
@@ -684,6 +692,7 @@ impl<'source> Parser<'source> {
             ),
             TokenType::LeftBrace | TokenType::RightBrace => (None, None, Precedence::NONE),
             TokenType::IF | TokenType::ELSE => (None, None, Precedence::NONE),
+            TokenType::AND => (None, Some(Box::new(Self::logical_and)), Precedence::AND),
             _ => todo!(),
         }
     }
