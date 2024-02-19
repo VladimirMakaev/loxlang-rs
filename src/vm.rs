@@ -15,7 +15,7 @@ use crate::{
     interner::{DefaultInterner, Interner, Key},
     parser::{
         AstExpression, AstStmt, Expression, IfStmt, LogicalExpression, ParseError, Parser,
-        StmtDeclaration,
+        StmtDeclaration, WhileStmt,
     },
     value::{ObjectType, ObjectValue, Value, ValueTypes},
 };
@@ -124,6 +124,10 @@ impl VirtualMachine {
         }
     }
 
+    pub fn byte_code(&self) -> &ByteCode {
+        &self.byte_code
+    }
+
     pub fn offset_since(&self, ip: usize) -> JumpOffset {
         JumpOffset::new(ip, self.byte_code.size())
     }
@@ -136,8 +140,8 @@ impl VirtualMachine {
             match op_code {
                 OpCode::CONSTANT(idx) => {
                     let value = &self.constants[idx as usize].clone();
-                    self.push(value.clone());
                     debug!("@{} CONSTANT {}", self.ip, self.as_display(value.clone()));
+                    self.push(value.clone());
                 }
                 OpCode::POP => {
                     let val = self.pop()?;
@@ -181,8 +185,8 @@ impl VirtualMachine {
                     self.push((left * right).into());
                 }
                 OpCode::SUBTRACT => {
-                    let left = self.pop_number(OpCodeTypes::MULTIPLY)?;
                     let right = self.pop_number(OpCodeTypes::MULTIPLY)?;
+                    let left = self.pop_number(OpCodeTypes::MULTIPLY)?;
                     debug!("@{} SUBTRACT {} {}", self.ip, left, right);
                     self.push((left - right).into());
                 }
@@ -205,8 +209,8 @@ impl VirtualMachine {
                 OpCode::FALSE => self.push(false.into()),
                 OpCode::NIL => self.push(Value::Nil),
                 OpCode::GREATER => {
-                    let left = self.pop_number(OpCodeTypes::GREATER)?;
                     let right = self.pop_number(OpCodeTypes::GREATER)?;
+                    let left = self.pop_number(OpCodeTypes::GREATER)?;
                     debug!("@{} GREATER {} {}", self.ip, left, right);
                     self.push((left > right).into());
                 }
@@ -310,6 +314,11 @@ impl VirtualMachine {
                         continue;
                     }
                 }
+                OpCode::LOOP(offset) => {
+                    debug!("@{} LOOP {}", self.ip, offset);
+                    self.ip -= offset as usize;
+                    continue;
+                }
             }
             self.ip += size;
         }
@@ -406,6 +415,30 @@ impl VirtualMachine {
 
                 Ok(())
             }
+            crate::parser::Stmt::While(WhileStmt {
+                condition,
+                loop_block,
+            }) => {
+                let start_of_loop = self.byte_code.size();
+                self.compile_expr(condition, context)?;
+                let jump_out = self.byte_code.size();
+                self.byte_code.write_op(
+                    OpCode::JUMPIFFALSE(i16::MAX),
+                    self.lookup_source_line(condition.start()),
+                );
+                self.byte_code
+                    .write_op(OpCode::POP, self.lookup_source_line(condition.start()));
+                self.compile_statement(loop_block, context)?;
+                self.byte_code.write_op(
+                    OpCode::LOOP(self.offset_since(start_of_loop).into()),
+                    self.lookup_source_line(loop_block.end()),
+                );
+                self.byte_code
+                    .write_op(OpCode::POP, self.lookup_source_line(loop_block.end()));
+                self.byte_code
+                    .patch_offset(jump_out + 1, self.offset_since(jump_out));
+                Ok(())
+            }
         }
     }
 
@@ -418,19 +451,17 @@ impl VirtualMachine {
             crate::parser::Expression::Assignment { lvalue, rvalue } => {
                 if let Expression::Identier(name) = lvalue.node() {
                     self.compile_expr(rvalue, context)?;
-                    if context.is_toplevel() {
+                    if let Some(offset) = context.resolve_local(name.as_str()) {
+                        self.byte_code.write_op(
+                            OpCode::SETLOCAL(offset as u16),
+                            self.lookup_source_line(lvalue.start()),
+                        )
+                    } else {
                         let idx = self.interner.intern_str(&name).idx;
                         self.byte_code.write_op(
                             OpCode::SETGLOBAL(idx as u16),
                             self.lookup_source_line(expr.start()),
                         );
-                    } else {
-                        if let Some(offset) = context.resolve_local(name.as_str()) {
-                            self.byte_code.write_op(
-                                OpCode::SETLOCAL(offset as u16),
-                                self.lookup_source_line(lvalue.start()),
-                            )
-                        }
                     }
                 }
             }
@@ -482,7 +513,11 @@ impl VirtualMachine {
                 self.compile_expr(&right.as_ref(), context)?;
                 self.byte_code.write_op(OpCode::ADD, left.start());
             }
-            crate::parser::Expression::Subtract { left: _, right: _ } => {}
+            crate::parser::Expression::Subtract { left, right } => {
+                self.compile_expr(&left.as_ref(), context)?;
+                self.compile_expr(&right.as_ref(), context)?;
+                self.byte_code.write_op(OpCode::SUBTRACT, left.start());
+            }
             crate::parser::Expression::UnaryNegation { expr } => {
                 self.compile_expr(expr.as_ref(), context)?;
                 self.byte_code.write_op(OpCode::NEGATE, expr.start());
@@ -495,8 +530,8 @@ impl VirtualMachine {
                 self.byte_code.write_op(OpCode::NOT, expr.start());
             }
             crate::parser::Expression::Logical(LogicalExpression::Greater { left, right }) => {
-                self.compile_expr(&right, context)?;
                 self.compile_expr(&left, context)?;
+                self.compile_expr(&right, context)?;
                 self.byte_code.write_op(OpCode::GREATER, left.start());
             }
             crate::parser::Expression::Logical(LogicalExpression::Less { left, right }) => {
@@ -538,7 +573,6 @@ impl VirtualMachine {
                 self.byte_code
                     .patch_offset(jump_out + 1, self.offset_since(jump_out));
             }
-
             _ => todo!(),
         }
 

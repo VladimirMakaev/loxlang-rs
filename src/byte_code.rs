@@ -22,6 +22,12 @@ impl JumpOffset {
     }
 }
 
+impl From<JumpOffset> for i16 {
+    fn from(value: JumpOffset) -> Self {
+        return value.0;
+    }
+}
+
 impl ByteCode {
     pub fn size(&self) -> usize {
         self.code.len()
@@ -63,7 +69,9 @@ impl ByteCode {
                 *idx = self.read_u16(ip);
                 3
             }
-            Some(OpCode::JUMPIFFALSE(offset)) | Some(OpCode::JUMP(offset)) => {
+            Some(OpCode::JUMPIFFALSE(offset))
+            | Some(OpCode::JUMP(offset))
+            | Some(OpCode::LOOP(offset)) => {
                 *offset = self.read_i16(ip);
                 3
             }
@@ -101,7 +109,7 @@ impl ByteCode {
             OpCode::DECLAREGLOBAL(idx) => write_one_u16(&mut self.code, idx),
             OpCode::GETGLOBAL(idx) | OpCode::SETGLOBAL(idx) => write_one_u16(&mut self.code, idx),
             OpCode::SETLOCAL(idx) | OpCode::GETLOCAL(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::JUMPIFFALSE(offset) | OpCode::JUMP(offset) => {
+            OpCode::JUMPIFFALSE(offset) | OpCode::JUMP(offset) | OpCode::LOOP(offset) => {
                 write_one_i16(&mut self.code, offset)
             }
             _ => 0,
@@ -163,6 +171,7 @@ pub enum OpCode {
     DECLAREGLOBAL(u16),
     JUMP(i16),
     JUMPIFFALSE(i16),
+    LOOP(i16),
     POP,
     ADD,
     MULTIPLY,

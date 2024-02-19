@@ -167,6 +167,7 @@ pub enum Stmt {
     Print(AstExpression),
     Declarations(StmtDeclaration),
     If(IfStmt),
+    While(WhileStmt),
     Block(Vec<AstStmt>),
     Expression(AstExpression),
 }
@@ -176,6 +177,12 @@ pub struct IfStmt {
     pub(crate) condition: AstExpression,
     pub(crate) then_block: Box<AstStmt>,
     pub(crate) else_block: Option<Box<AstStmt>>,
+}
+
+#[derive(Debug)]
+pub struct WhileStmt {
+    pub(crate) condition: AstExpression,
+    pub(crate) loop_block: Box<AstStmt>,
 }
 
 #[derive(Debug, strum::Display)]
@@ -349,6 +356,10 @@ impl<'source> Parser<'source> {
 
         if self.check_token(TokenType::IF)? {
             return self.if_statement();
+        }
+
+        if self.check_token(TokenType::WHILE)? {
+            return self.while_statement();
         }
 
         if self.check_token(TokenType::LeftBrace)? {
@@ -618,6 +629,20 @@ impl<'source> Parser<'source> {
         Ok(Stmt::Block(statements).ast(Span::new(left.start(), right.end())))
     }
 
+    fn while_statement(&mut self) -> StmtResult {
+        let while_token = self.consume(TokenType::WHILE)?;
+        self.consume(TokenType::LeftParen)?;
+        let condition = self.expression()?;
+        self.consume(TokenType::RightParen)?;
+        let loop_block = self.statement()?;
+        let span = Span::new(while_token.start(), loop_block.end());
+        Ok(Stmt::While(WhileStmt {
+            condition,
+            loop_block: Box::new(loop_block),
+        })
+        .ast(span))
+    }
+
     fn if_statement(&mut self) -> StmtResult {
         let if_token = self.consume(TokenType::IF)?;
         self.consume(TokenType::LeftParen)?;
@@ -703,6 +728,7 @@ impl<'source> Parser<'source> {
             ),
             TokenType::LeftBrace | TokenType::RightBrace => (None, None, Precedence::NONE),
             TokenType::IF | TokenType::ELSE => (None, None, Precedence::NONE),
+            TokenType::WHILE => (None, None, Precedence::NONE),
             TokenType::AND => (None, Some(Box::new(Self::logical_and)), Precedence::AND),
             TokenType::OR => (None, Some(Box::new(Self::logical_or)), Precedence::AND),
             _ => todo!(),

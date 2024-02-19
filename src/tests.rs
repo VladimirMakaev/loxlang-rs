@@ -36,6 +36,13 @@ pub fn test_block(code: &str) -> anyhow::Result<()> {
     verify_code(code)
 }
 
+const WHILE_SYNTAX: &'static str = include_str!("../tests/while/syntax.lox");
+
+#[test_case(WHILE_SYNTAX)]
+pub fn test_while(code: &str) -> anyhow::Result<()> {
+    verify_code(code)
+}
+
 fn verify_code(code: &str) -> anyhow::Result<()> {
     let mut vm = VirtualMachine::new();
     vm.compile(code)?;
@@ -57,7 +64,6 @@ fn collect_stdout_expectations(code: &str) -> Vec<String> {
     let regex = Regex::new("//[ ]*expect: ?(.*)").unwrap();
     for capture in regex.captures_iter(code) {
         if let Some(m) = capture.get(1) {
-            //dbg!(m);
             result.push(m.as_str().into());
         }
     }
