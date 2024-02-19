@@ -24,6 +24,8 @@ mod vm;
 
 #[derive(clap::Parser)]
 struct App {
+    #[arg(long)]
+    decompile: bool,
     file: PathBuf,
 }
 
@@ -98,6 +100,10 @@ fn main() -> anyhow::Result<()> {
     if let Err(err) = vm.compile(&code) {
         opts.report_errors(&code, &codemap, &mut stderr(), err)?;
         exit(65);
+    }
+    if opts.decompile {
+        println!("{}", vm.byte_code().decompile(0));
+        exit(0);
     }
     if let Err(err) = vm.run(&mut stdout()) {
         opts.report_errors(&code, &codemap, &mut stderr(), err)?;
