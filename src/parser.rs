@@ -168,6 +168,7 @@ pub enum Stmt {
     Declarations(StmtDeclaration),
     If(IfStmt),
     While(WhileStmt),
+    For(ForStmt),
     Block(Vec<AstStmt>),
     Expression(AstExpression),
 }
@@ -183,6 +184,14 @@ pub struct IfStmt {
 pub struct WhileStmt {
     pub(crate) condition: AstExpression,
     pub(crate) loop_block: Box<AstStmt>,
+}
+
+#[derive(Debug)]
+pub struct ForStmt {
+    pub(crate) condition: Option<Box<AstExpression>>,
+    pub(crate) initializer: Option<Box<AstStmt>>,
+    pub(crate) increment: Option<Box<AstStmt>>,
+    pub(crate) block: Box<AstStmt>,
 }
 
 #[derive(Debug, strum::Display)]
@@ -362,6 +371,10 @@ impl<'source> Parser<'source> {
             return self.while_statement();
         }
 
+        if self.check_token(TokenType::FOR)? {
+            return self.for_statement();
+        }
+
         if self.check_token(TokenType::LeftBrace)? {
             return self.block_statement();
         }
@@ -398,6 +411,22 @@ impl<'source> Parser<'source> {
             _ => Ok(None),
         }
     }
+
+    // fn match_tokens<const N: usize>(
+    //     &mut self,
+    //     token_types: [TokenType; N],
+    // ) -> Result<Option<Token>, ParseError> {
+    //     match self.lexer.peek() {
+    //         Some(Ok(t)) if token_types.iter().find(|x| t.ty().eq(x)).is_some() => {
+    //             self.lexer.next().map_or(Ok(None), |r| {
+    //                 r.map(Some)
+    //                     .map_err(|err| ParseError::LexerError { source: err })
+    //             })
+    //         }
+    //         Some(Err(e)) => Err(ParseError::LexerError { source: e.clone() }),
+    //         _ => Ok(None),
+    //     }
+    // }
 
     fn consume_next(&mut self) -> Result<Token, ParseError> {
         if let Some(t) = self.lexer.next() {
@@ -643,6 +672,55 @@ impl<'source> Parser<'source> {
         .ast(span))
     }
 
+    fn for_statement(&mut self) -> StmtResult {
+        let for_token = self.consume(TokenType::FOR)?;
+
+        self.consume(TokenType::LeftParen)?;
+
+        let init_stmt = if self.check_token(TokenType::VAR)? {
+            Some(Box::new(self.var_declaration()?))
+        } else {
+            if self.check_token(TokenType::Semicolon)? {
+                self.consume(TokenType::Semicolon)?;
+                None
+            } else {
+                let expression = self.expression()?;
+                self.consume(TokenType::Semicolon)?;
+                let span = Span::new(expression.start(), expression.end());
+                Some(Box::new(Stmt::Expression(expression).ast(span)))
+            }
+        };
+
+        let condition = if let Some(_) = self.match_token(TokenType::Semicolon)? {
+            None
+        } else {
+            let expression = Box::new(self.expression()?);
+            self.consume(TokenType::Semicolon)?;
+            Some(expression)
+        };
+
+        let increment_stmt = if self.check_token(TokenType::RightParen)? {
+            None
+        } else {
+            let expression = self.expression()?;
+            let span = Span::new(expression.start(), expression.end());
+            Some(Box::new(Stmt::Expression(expression).ast(span)))
+        };
+
+        self.consume(TokenType::RightParen)?;
+
+        let block = self.statement()?;
+
+        let span = Span::new(for_token.start(), block.end());
+        Ok(Stmt::For(ForStmt {
+            condition,
+            initializer: init_stmt,
+            increment: increment_stmt,
+            block: Box::new(block),
+        })
+        .ast(span))
+    }
+
     fn if_statement(&mut self) -> StmtResult {
         let if_token = self.consume(TokenType::IF)?;
         self.consume(TokenType::LeftParen)?;
@@ -728,10 +806,10 @@ impl<'source> Parser<'source> {
             ),
             TokenType::LeftBrace | TokenType::RightBrace => (None, None, Precedence::NONE),
             TokenType::IF | TokenType::ELSE => (None, None, Precedence::NONE),
-            TokenType::WHILE => (None, None, Precedence::NONE),
+            TokenType::WHILE | TokenType::FOR => (None, None, Precedence::NONE),
             TokenType::AND => (None, Some(Box::new(Self::logical_and)), Precedence::AND),
             TokenType::OR => (None, Some(Box::new(Self::logical_or)), Precedence::AND),
-            _ => todo!(),
+            _ => panic!("Not implemented token: {:?}", token),
         }
     }
 }

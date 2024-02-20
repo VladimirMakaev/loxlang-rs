@@ -43,6 +43,15 @@ pub fn test_while(code: &str) -> anyhow::Result<()> {
     verify_code(code)
 }
 
+const FOR_SYNTAX: &'static str = include_str!("../tests/for/syntax.lox");
+const FOR_SCOPE: &'static str = include_str!("../tests/for/scope.lox");
+
+#[test_case(FOR_SYNTAX)]
+#[test_case(FOR_SCOPE)]
+pub fn test_for(code: &str) -> anyhow::Result<()> {
+    verify_code(code)
+}
+
 fn verify_code(code: &str) -> anyhow::Result<()> {
     let mut vm = VirtualMachine::new();
     vm.compile(code)?;

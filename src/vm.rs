@@ -14,7 +14,7 @@ use crate::{
     byte_code::{ByteCode, JumpOffset, OpCode, OpCodeError, OpCodeTypes},
     interner::{DefaultInterner, Interner, Key},
     parser::{
-        AstExpression, AstStmt, Expression, IfStmt, LogicalExpression, ParseError, Parser,
+        AstExpression, AstStmt, Expression, ForStmt, IfStmt, LogicalExpression, ParseError, Parser,
         StmtDeclaration, WhileStmt,
     },
     value::{ObjectType, ObjectValue, Value, ValueTypes},
@@ -437,6 +437,52 @@ impl VirtualMachine {
                     .write_op(OpCode::POP, self.lookup_source_line(loop_block.end()));
                 self.byte_code
                     .patch_offset(jump_out + 1, self.offset_since(jump_out));
+                Ok(())
+            }
+            crate::parser::Stmt::For(ForStmt {
+                condition,
+                initializer,
+                increment,
+                block,
+            }) => {
+                if let Some(initializer) = initializer {
+                    self.compile_statement(initializer, context)?;
+                }
+
+                let when_loop_starts = self.byte_code.size();
+                let mut when_condition_fails = None;
+
+                if let Some(condition) = condition {
+                    self.compile_expr(condition, context)?;
+                    when_condition_fails = Some(self.byte_code.size());
+                    self.byte_code.write_op(
+                        OpCode::JUMPIFFALSE(i16::MAX),
+                        self.lookup_source_line(condition.start()),
+                    );
+                    self.byte_code
+                        .write_op(OpCode::POP, self.lookup_source_line(condition.start()));
+                }
+
+                self.compile_statement(block, context)?;
+
+                if let Some(increment) = increment {
+                    self.compile_statement(increment, context)?;
+                }
+
+                self.byte_code.write_op(
+                    OpCode::LOOP(self.offset_since(when_loop_starts).into()),
+                    self.lookup_source_line(block.end()),
+                );
+
+                if let Some(when_condition_fails) = when_condition_fails {
+                    self.byte_code.patch_offset(
+                        when_condition_fails + 1,
+                        self.offset_since(when_condition_fails),
+                    );
+                }
+                self.byte_code
+                    .write_op(OpCode::POP, self.lookup_source_line(block.end()));
+
                 Ok(())
             }
         }
