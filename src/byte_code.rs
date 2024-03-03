@@ -75,6 +75,10 @@ impl ByteCode {
                 *offset = self.read_i16(ip);
                 3
             }
+            Some(OpCode::CALL(arg_count)) => {
+                *arg_count = self.code[ip];
+                2
+            }
             _ => 1,
         };
         result.map(|x| Ok((x, size)))
@@ -111,6 +115,10 @@ impl ByteCode {
             OpCode::SETLOCAL(idx) | OpCode::GETLOCAL(idx) => write_one_u16(&mut self.code, idx),
             OpCode::JUMPIFFALSE(offset) | OpCode::JUMP(offset) | OpCode::LOOP(offset) => {
                 write_one_i16(&mut self.code, offset)
+            }
+            OpCode::CALL(arg_count) => {
+                self.code.push(arg_count as u8);
+                1
             }
             _ => 0,
         };
@@ -172,6 +180,8 @@ pub enum OpCode {
     JUMP(i16),
     JUMPIFFALSE(i16),
     LOOP(i16),
+    CALL(u8),
+    RET,
     POP,
     ADD,
     MULTIPLY,

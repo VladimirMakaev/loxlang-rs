@@ -10,6 +10,12 @@ pub struct Key {
 
 pub type DefaultInterner = Interner<BuildHasherDefault<DefaultHasher>>;
 
+impl From<usize> for Key {
+    fn from(value: usize) -> Self {
+        Key { idx: value }
+    }
+}
+
 pub struct Interner<H: BuildHasher> {
     all_strings: Vec<String>,
     raw_table: hashbrown::HashTable<usize>,

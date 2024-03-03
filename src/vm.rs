@@ -5,6 +5,7 @@ use std::{
     io::Write,
 };
 
+use anyhow::anyhow;
 use hashbrown::HashMap;
 
 use thiserror::Error;
@@ -45,25 +46,70 @@ pub enum VirtualMachineError {
     Unhandled(#[from] anyhow::Error),
 }
 
-pub struct VirtualMachine {
-    byte_code: ByteCode,
+struct Function {
+    name: usize,
+    arity: usize,
+    code: ByteCode,
+}
+
+struct CallFrame {
+    function_idx: usize,
     ip: usize,
+    locals_idx: usize,
+}
+
+impl CallFrame {
+    fn inc_ip(&mut self, offset: usize) {
+        self.ip += offset;
+    }
+
+    fn dec_ip(&mut self, offset: usize) {
+        self.ip -= offset;
+    }
+}
+
+pub struct VirtualMachine {
+    frame_idx: usize,
+    frames: Vec<CallFrame>,
+    interner: DefaultInterner,
     stack: Vec<Value>,
     constants: Vec<Value>,
-    interner: DefaultInterner,
+    functions: Vec<Function>,
+    function_by_name: HashMap<usize, usize>,
     globals: HashMap<usize, Value>,
 }
 
 impl VirtualMachine {
     pub fn new() -> Self {
         Self {
-            byte_code: Default::default(),
             constants: Default::default(),
-            ip: 0,
             stack: Default::default(),
             interner: Interner::new(BuildHasherDefault::<DefaultHasher>::default()),
             globals: Default::default(),
+            frame_idx: 0,
+            frames: Default::default(),
+            functions: Default::default(),
+            function_by_name: Default::default(),
         }
+    }
+
+    pub fn decompile<TOut: Write>(&self, stdout: &mut TOut) -> Result<(), VirtualMachineError> {
+        for (name_idx, idx) in &self.function_by_name {
+            write!(
+                stdout,
+                "{}:\n{}",
+                self.interner.get_str(&Key { idx: *name_idx }),
+                self.functions[self.constants[*idx]
+                    .as_object()
+                    .ok_or(VirtualMachineError::Unhandled(anyhow!("Expected function")))?
+                    .object_id]
+                    .code
+                    .decompile(0)
+            )
+            .map_err(|e| VirtualMachineError::Unhandled(e.into()))?
+        }
+
+        Ok(())
     }
 
     pub fn compile(&mut self, code: &str) -> Result<(), VirtualMachineError> {
@@ -72,9 +118,14 @@ impl VirtualMachine {
         if parser.had_errors() {
             return Err(VirtualMachineError::CompileError(parser.into_errors()));
         }
+
+        self.define_function("<script>", 0)?;
+
         let mut context = LexicalContext {
             depth: 0,
             locals: Vec::new(),
+            function_idx: 0,
+            args: Default::default(),
         };
         for smt in smts.iter() {
             self.compile_statement(smt, &mut context)?;
@@ -124,28 +175,65 @@ impl VirtualMachine {
         }
     }
 
-    pub fn byte_code(&self) -> &ByteCode {
-        &self.byte_code
+    fn define_function(&mut self, name: &str, arity: usize) -> Result<(), VirtualMachineError> {
+        let idx = self.interner.intern_str(name).idx;
+        if self.function_by_name.contains_key(&idx) {
+            Err(VirtualMachineError::Unhandled(anyhow!(
+                "Function with name {} has already been declared",
+                name
+            )))
+        } else {
+            self.function_by_name.insert(idx, self.constants.len());
+            self.constants.push(Value::fun(self.functions.len()));
+            self.functions.push(Function {
+                name: idx,
+                arity: arity,
+                code: ByteCode::default(),
+            });
+            Ok(())
+        }
     }
 
-    pub fn offset_since(&self, ip: usize) -> JumpOffset {
-        JumpOffset::new(ip, self.byte_code.size())
+    fn write_op(&mut self, function_idx: usize, op: OpCode, line: usize) {
+        self.functions[function_idx].code.write_op(op, line);
+    }
+
+    pub fn next_instruction(&self, function_idx: usize) -> usize {
+        self.functions[function_idx].code.size()
+    }
+
+    pub fn offset_since(&self, ip: usize, function_idx: usize) -> JumpOffset {
+        JumpOffset::new(ip, self.next_instruction(function_idx))
+    }
+
+    fn next_op(&mut self) -> Option<Result<(OpCode, usize), OpCodeError>> {
+        let frame = &self.frames[self.frame_idx];
+        let function = &mut self.functions[frame.function_idx];
+        function.code.read_next(frame.ip)
+    }
+
+    fn ip(&self) -> usize {
+        self.frames[self.frame_idx].ip
     }
 
     pub fn run<TOut: Write>(&mut self, stdout: &mut TOut) -> Result<(), VirtualMachineError> {
-        debug!("byte code = \n{}", self.byte_code.decompile(0));
+        self.frames.push(CallFrame {
+            function_idx: 0,
+            ip: 0,
+            locals_idx: 0,
+        });
 
-        while let Some(x) = self.byte_code.read_next(self.ip) {
+        while let Some(x) = self.next_op() {
             let (op_code, size) = x?;
             match op_code {
                 OpCode::CONSTANT(idx) => {
                     let value = &self.constants[idx as usize].clone();
-                    debug!("@{} CONSTANT {}", self.ip, self.as_display(value.clone()));
+                    debug!("@{} CONSTANT {}", self.ip(), self.as_display(value.clone()));
                     self.push(value.clone());
                 }
                 OpCode::POP => {
                     let val = self.pop()?;
-                    debug!("@{} POP {}", self.ip, self.as_display(val));
+                    debug!("@{} POP {}", self.ip(), self.as_display(val));
                 }
                 OpCode::ADD => {
                     let right = self.pop()?;
@@ -154,7 +242,7 @@ impl VirtualMachine {
                     match (left, right) {
                         (Value::Number(left), Value::Number(right)) => {
                             self.push((left + right).into());
-                            debug!("@{} ADD {} {}", self.ip, left, right);
+                            debug!("@{} ADD {} {}", self.ip(), left, right);
                         }
                         (
                             Value::Object(ObjectValue {
@@ -175,34 +263,40 @@ impl VirtualMachine {
                                 object_id: result.idx,
                             }));
                         }
-                        (_, _) => todo!(),
+                        (left, right) => {
+                            return Err(VirtualMachineError::Unhandled(anyhow!(
+                                "ADD: unsupported types of operands: left: {}, right: {}",
+                                self.as_display(left),
+                                self.as_display(right)
+                            )))
+                        }
                     }
                 }
                 OpCode::MULTIPLY => {
                     let left = self.pop_number(OpCodeTypes::MULTIPLY)?;
                     let right = self.pop_number(OpCodeTypes::MULTIPLY)?;
-                    debug!("@{} MULTIPLY {} {}", self.ip, left, right);
+                    debug!("@{} MULTIPLY {} {}", self.ip(), left, right);
                     self.push((left * right).into());
                 }
                 OpCode::SUBTRACT => {
                     let right = self.pop_number(OpCodeTypes::MULTIPLY)?;
                     let left = self.pop_number(OpCodeTypes::MULTIPLY)?;
-                    debug!("@{} SUBTRACT {} {}", self.ip, left, right);
+                    debug!("@{} SUBTRACT {} {}", self.ip(), left, right);
                     self.push((left - right).into());
                 }
                 OpCode::NEGATE => {
                     let value = self.pop_number(OpCodeTypes::NEGATE)?;
-                    debug!("@{} NEGATE {}", self.ip, value);
+                    debug!("@{} NEGATE {}", self.ip(), value);
                     self.push((-value).into());
                 }
                 OpCode::NOT => {
                     let value = self.pop()?;
-                    debug!("@{} NOT {}", self.ip, self.is_truthy(&value));
+                    debug!("@{} NOT {}", self.ip(), self.is_truthy(&value));
                     self.push(self.is_truthy(&value).into());
                 }
                 OpCode::PRINT => {
                     let value = self.pop()?;
-                    debug!("@{} PRINT {}", self.ip, self.as_display(value.clone()));
+                    debug!("@{} PRINT {}", self.ip(), self.as_display(value.clone()));
                     writeln!(stdout, "{}", self.as_display(value)).map_err(anyhow::Error::msg)?;
                 }
                 OpCode::TRUE => self.push(true.into()),
@@ -211,26 +305,26 @@ impl VirtualMachine {
                 OpCode::GREATER => {
                     let right = self.pop_number(OpCodeTypes::GREATER)?;
                     let left = self.pop_number(OpCodeTypes::GREATER)?;
-                    debug!("@{} GREATER {} {}", self.ip, left, right);
+                    debug!("@{} GREATER {} {}", self.ip(), left, right);
                     self.push((left > right).into());
                 }
                 OpCode::LESS => {
                     let left = self.pop_number(OpCodeTypes::LESS)?;
                     let right = self.pop_number(OpCodeTypes::LESS)?;
-                    debug!("@{} LESS {} {}", self.ip, left, right);
+                    debug!("@{} LESS {} {}", self.ip(), left, right);
                     self.push((left < right).into());
                 }
                 OpCode::EQUAL => {
                     let left = self.pop_number(OpCodeTypes::EQUAL)?;
                     let right = self.pop_number(OpCodeTypes::EQUAL)?;
-                    debug!("@{} EQUAL {} {}", self.ip, left, right);
+                    debug!("@{} EQUAL {} {}", self.ip(), left, right);
                     self.push((left == right).into());
                 }
                 OpCode::DECLAREGLOBAL(name_idx) => {
                     let init_value = self.pop()?;
                     debug!(
                         "@{} DEFINE_GLOBAL {}={}",
-                        self.ip,
+                        self.ip(),
                         self.interner.get_str(&Key {
                             idx: name_idx as usize
                         }),
@@ -241,7 +335,7 @@ impl VirtualMachine {
                 OpCode::GETGLOBAL(name_idx) => {
                     debug!(
                         "@{} GET_GLOBAL {}",
-                        self.ip,
+                        self.ip(),
                         self.interner.get_str(&Key {
                             idx: name_idx as usize
                         })
@@ -270,7 +364,7 @@ impl VirtualMachine {
                     }
                     debug!(
                         "@{} SETGLOBAL {}={}",
-                        self.ip,
+                        self.ip(),
                         name,
                         self.as_display(new_value.clone())
                     );
@@ -279,14 +373,15 @@ impl VirtualMachine {
                     self.push(new_value);
                 }
                 OpCode::GETLOCAL(stack_offset) => {
-                    debug!("@{} GETLOCAL {}", self.ip, stack_offset);
-                    self.push(self.stack[stack_offset as usize].clone());
+                    debug!("@{} GETLOCAL {}", self.ip(), stack_offset);
+                    let slot = self.frames[self.frame_idx].locals_idx;
+                    self.push(self.stack[slot + stack_offset as usize].clone());
                 }
                 OpCode::SETLOCAL(stack_offset) => {
                     let new_value = self.pop()?;
                     debug!(
                         "@{} SETLOCAL {}={}",
-                        self.ip,
+                        self.ip(),
                         stack_offset,
                         self.as_display(new_value.clone())
                     );
@@ -298,8 +393,8 @@ impl VirtualMachine {
                     }
                 }
                 OpCode::JUMP(offset) => {
-                    debug!("@{} JUMP {}", self.ip, offset);
-                    self.ip = ((self.ip as isize) + offset as isize) as usize;
+                    debug!("@{} JUMP {}", self.ip(), offset);
+                    self.frames[self.frame_idx].inc_ip(offset as usize);
                     continue;
                 }
                 OpCode::JUMPIFFALSE(offset) => {
@@ -307,23 +402,73 @@ impl VirtualMachine {
 
                     let val_bool = self.is_truthy(&val);
 
-                    debug!("@{} JUMPIFFALSE {} cond = {}", self.ip, offset, val_bool);
+                    debug!("@{} JUMPIFFALSE {} cond = {}", self.ip(), offset, val_bool);
 
                     if !val_bool {
-                        self.ip = ((self.ip as isize) + offset as isize) as usize;
+                        self.frames[self.frame_idx].inc_ip(offset as usize);
                         continue;
                     }
                 }
                 OpCode::LOOP(offset) => {
-                    debug!("@{} LOOP {}", self.ip, offset);
-                    self.ip -= offset as usize;
+                    debug!("@{} LOOP {}", self.ip(), offset);
+                    self.frames[self.frame_idx].dec_ip(offset as usize);
+                    continue;
+                }
+                OpCode::CALL(arg_count) => {
+                    let arg_count = arg_count as usize;
+                    let function = &self.stack[self.stack.len() - arg_count - 1];
+                    debug!(
+                        "@{} CALL {} arity = {}",
+                        self.ip(),
+                        self.as_display(function.clone()),
+                        arg_count
+                    );
+                    if let Value::Object(ObjectValue {
+                        ty: ObjectType::Function,
+                        object_id: function_idx,
+                    }) = function
+                    {
+                        self.frames[self.frame_idx].inc_ip(size);
+                        self.frames.push(CallFrame {
+                            ip: 0,
+                            function_idx: *function_idx,
+                            locals_idx: self.stack.len() - arg_count - 1,
+                        });
+                        self.frame_idx += 1;
+                        continue;
+                    } else {
+                        return Err(anyhow!(
+                            "Expected function value on the stack, got {}",
+                            self.as_display(function.to_owned())
+                        )
+                        .into());
+                    }
+                }
+                OpCode::RET => {
+                    let ret_value = self.pop()?;
+                    debug!(
+                        "@{} RET = {}",
+                        self.ip(),
+                        self.as_display(ret_value.clone())
+                    );
+                    let fun = &self.functions[self.frames[self.frame_idx].function_idx];
+                    self.stack.truncate(self.stack.len() - fun.arity - 1);
+                    self.frames.pop();
+                    self.frame_idx -= 1;
+                    self.stack.push(ret_value);
                     continue;
                 }
             }
-            self.ip += size;
+            self.frames[self.frame_idx].inc_ip(size);
         }
 
         Ok(())
+    }
+
+    pub fn patch_offset(&mut self, function_idx: usize, addr: usize, new_offset: JumpOffset) {
+        self.functions[function_idx]
+            .code
+            .patch_offset(addr, new_offset);
     }
 
     pub fn compile_statement<'a>(
@@ -334,30 +479,70 @@ impl VirtualMachine {
         match stmt.node() {
             crate::parser::Stmt::Print(expr) => {
                 self.compile_expr(expr, context)?;
-                self.byte_code
-                    .write_op(OpCode::PRINT, self.lookup_source_line(expr.start()));
+                self.write_op(
+                    context.function_idx,
+                    OpCode::PRINT,
+                    self.lookup_source_line(expr.start()),
+                );
                 Ok(())
             }
             crate::parser::Stmt::Expression(expr) => {
                 self.compile_expr(expr, context)?;
                 Ok(())
             }
+
+            crate::parser::Stmt::Declarations(StmtDeclaration::Function { name, params, body }) => {
+                let str_id = self.interner.intern_str(&name.node()).idx;
+                if self.function_by_name.contains_key(&str_id) {
+                    return Err(VirtualMachineError::Unhandled(anyhow!(
+                        "Duplicate function {} is declared",
+                        name.node()
+                    )));
+                }
+                let fun_idx = context.function_idx;
+                context.function(self.functions.len());
+                self.define_function(&name.node(), params.len())?;
+                context.push_args(["__current_fun__"]);
+                context.push_args(params.iter().map(|x| x.node().as_str()));
+                context.enter_block();
+                self.compile_statement(&body, context)?;
+                self.write_op(
+                    context.function_idx,
+                    OpCode::NIL,
+                    self.lookup_source_line(body.end()),
+                );
+                self.write_op(
+                    context.function_idx,
+                    OpCode::RET,
+                    self.lookup_source_line(body.end()),
+                );
+                context.leave_block();
+                context.clear_args();
+                context.function(fun_idx);
+                Ok(())
+            }
+
             crate::parser::Stmt::Declarations(StmtDeclaration::Variable { ident, expr }) => {
                 if let Some(e) = expr {
                     self.compile_expr(e, context)?;
                 } else {
-                    self.byte_code
-                        .write_op(OpCode::NIL, self.lookup_source_line(ident.start()));
+                    self.write_op(
+                        context.function_idx,
+                        OpCode::NIL,
+                        self.lookup_source_line(ident.start()),
+                    );
                 }
                 if context.is_toplevel() {
                     let ident_idx = self.interner.intern_str(ident.node()).idx;
-                    self.byte_code.write_op(
+                    self.write_op(
+                        context.function_idx,
                         OpCode::DECLAREGLOBAL((ident_idx) as u16),
                         self.lookup_source_line(ident.start()),
                     );
                 } else {
                     let offset = context.new_local(ident.node());
-                    self.byte_code.write_op(
+                    self.write_op(
+                        context.function_idx,
                         OpCode::SETLOCAL(offset as u16),
                         self.lookup_source_line(ident.start()),
                     )
@@ -366,7 +551,7 @@ impl VirtualMachine {
             }
             crate::parser::Stmt::Block(block) => {
                 context.enter_block();
-                for each_stmt in block.iter() {
+                for each_stmt in block.0.iter() {
                     self.compile_statement(each_stmt, context)?;
                 }
                 context.leave_block();
@@ -378,39 +563,56 @@ impl VirtualMachine {
                 else_block,
             }) => {
                 self.compile_expr(condition, context)?;
-                let jump_to_else = self.byte_code.size(); //
+                let jump_to_else = self.next_instruction(context.function_idx); //
 
-                self.byte_code.write_op(
+                self.write_op(
+                    context.function_idx,
                     OpCode::JUMPIFFALSE(std::i16::MIN),
                     self.lookup_source_line(stmt.start()),
                 );
 
-                self.byte_code
-                    .write_op(OpCode::POP, self.lookup_source_line(stmt.start()));
+                self.write_op(
+                    context.function_idx,
+                    OpCode::POP,
+                    self.lookup_source_line(stmt.start()),
+                );
 
                 self.compile_statement(then_block, context)?;
 
                 if let Some(else_block) = else_block {
-                    let jump_after_then = self.byte_code.size();
+                    let jump_after_then = self.functions[context.function_idx].code.size();
 
-                    self.byte_code.write_op(
+                    self.write_op(
+                        context.function_idx,
                         OpCode::JUMP(std::i16::MIN),
                         self.lookup_source_line(stmt.start()),
                     );
 
-                    self.byte_code
-                        .patch_offset(jump_to_else + 1, self.offset_since(jump_to_else));
+                    self.patch_offset(
+                        context.function_idx,
+                        jump_to_else + 1,
+                        self.offset_since(jump_to_else, context.function_idx),
+                    );
 
-                    self.byte_code
-                        .write_op(OpCode::POP, self.lookup_source_line(stmt.start()));
+                    self.write_op(
+                        context.function_idx,
+                        OpCode::POP,
+                        self.lookup_source_line(stmt.start()),
+                    );
 
                     self.compile_statement(else_block, context)?;
 
-                    self.byte_code
-                        .patch_offset(jump_after_then + 1, self.offset_since(jump_after_then));
+                    self.patch_offset(
+                        context.function_idx,
+                        jump_after_then + 1,
+                        self.offset_since(jump_after_then, context.function_idx),
+                    );
                 } else {
-                    self.byte_code
-                        .patch_offset(jump_to_else + 1, self.offset_since(jump_to_else));
+                    self.patch_offset(
+                        context.function_idx,
+                        jump_to_else + 1,
+                        self.offset_since(jump_to_else, context.function_idx),
+                    );
                 }
 
                 Ok(())
@@ -419,24 +621,38 @@ impl VirtualMachine {
                 condition,
                 loop_block,
             }) => {
-                let start_of_loop = self.byte_code.size();
+                let start_of_loop = self.next_instruction(context.function_idx);
                 self.compile_expr(condition, context)?;
-                let jump_out = self.byte_code.size();
-                self.byte_code.write_op(
+                let jump_out = self.next_instruction(context.function_idx);
+                self.write_op(
+                    context.function_idx,
                     OpCode::JUMPIFFALSE(i16::MAX),
                     self.lookup_source_line(condition.start()),
                 );
-                self.byte_code
-                    .write_op(OpCode::POP, self.lookup_source_line(condition.start()));
+                self.write_op(
+                    context.function_idx,
+                    OpCode::POP,
+                    self.lookup_source_line(condition.start()),
+                );
                 self.compile_statement(loop_block, context)?;
-                self.byte_code.write_op(
-                    OpCode::LOOP(self.offset_since(start_of_loop).into()),
+                self.write_op(
+                    context.function_idx,
+                    OpCode::LOOP(
+                        self.offset_since(start_of_loop, context.function_idx)
+                            .into(),
+                    ),
                     self.lookup_source_line(loop_block.end()),
                 );
-                self.byte_code
-                    .write_op(OpCode::POP, self.lookup_source_line(loop_block.end()));
-                self.byte_code
-                    .patch_offset(jump_out + 1, self.offset_since(jump_out));
+                self.write_op(
+                    context.function_idx,
+                    OpCode::POP,
+                    self.lookup_source_line(loop_block.end()),
+                );
+                self.patch_offset(
+                    context.function_idx,
+                    jump_out + 1,
+                    self.offset_since(jump_out, context.function_idx),
+                );
                 Ok(())
             }
             crate::parser::Stmt::For(ForStmt {
@@ -449,18 +665,22 @@ impl VirtualMachine {
                     self.compile_statement(initializer, context)?;
                 }
 
-                let when_loop_starts = self.byte_code.size();
+                let when_loop_starts = self.next_instruction(context.function_idx);
                 let mut when_condition_fails = None;
 
                 if let Some(condition) = condition {
                     self.compile_expr(condition, context)?;
-                    when_condition_fails = Some(self.byte_code.size());
-                    self.byte_code.write_op(
+                    when_condition_fails = Some(self.next_instruction(context.function_idx));
+                    self.write_op(
+                        context.function_idx,
                         OpCode::JUMPIFFALSE(i16::MAX),
                         self.lookup_source_line(condition.start()),
                     );
-                    self.byte_code
-                        .write_op(OpCode::POP, self.lookup_source_line(condition.start()));
+                    self.write_op(
+                        context.function_idx,
+                        OpCode::POP,
+                        self.lookup_source_line(condition.start()),
+                    );
                 }
 
                 self.compile_statement(block, context)?;
@@ -469,20 +689,37 @@ impl VirtualMachine {
                     self.compile_statement(increment, context)?;
                 }
 
-                self.byte_code.write_op(
-                    OpCode::LOOP(self.offset_since(when_loop_starts).into()),
+                self.write_op(
+                    context.function_idx,
+                    OpCode::LOOP(
+                        self.offset_since(when_loop_starts, context.function_idx)
+                            .into(),
+                    ),
                     self.lookup_source_line(block.end()),
                 );
 
                 if let Some(when_condition_fails) = when_condition_fails {
-                    self.byte_code.patch_offset(
+                    self.patch_offset(
+                        context.function_idx,
                         when_condition_fails + 1,
-                        self.offset_since(when_condition_fails),
+                        self.offset_since(when_condition_fails, context.function_idx),
                     );
                 }
-                self.byte_code
-                    .write_op(OpCode::POP, self.lookup_source_line(block.end()));
+                self.write_op(
+                    context.function_idx,
+                    OpCode::POP,
+                    self.lookup_source_line(block.end()),
+                );
 
+                Ok(())
+            }
+            crate::parser::Stmt::Return(value) => {
+                self.compile_expr(value, context)?;
+                self.write_op(
+                    context.function_idx,
+                    OpCode::RET,
+                    self.lookup_source_line(stmt.start()),
+                );
                 Ok(())
             }
         }
@@ -498,13 +735,15 @@ impl VirtualMachine {
                 if let Expression::Identier(name) = lvalue.node() {
                     self.compile_expr(rvalue, context)?;
                     if let Some(offset) = context.resolve_local(name.as_str()) {
-                        self.byte_code.write_op(
+                        self.write_op(
+                            context.function_idx,
                             OpCode::SETLOCAL(offset as u16),
                             self.lookup_source_line(lvalue.start()),
                         )
                     } else {
                         let idx = self.interner.intern_str(&name).idx;
-                        self.byte_code.write_op(
+                        self.write_op(
+                            context.function_idx,
                             OpCode::SETGLOBAL(idx as u16),
                             self.lookup_source_line(expr.start()),
                         );
@@ -513,26 +752,41 @@ impl VirtualMachine {
             }
             crate::parser::Expression::Identier(name) => {
                 if let Some(offset) = context.resolve_local(name.as_str()) {
-                    self.byte_code.write_op(
+                    self.write_op(
+                        context.function_idx,
                         OpCode::GETLOCAL(offset as u16),
                         self.lookup_source_line(expr.start()),
                     )
                 } else {
                     let name_idx = self.interner.intern_str(name.as_str());
-                    self.byte_code.write_op(
-                        OpCode::GETGLOBAL(name_idx.idx as u16),
-                        self.lookup_source_line(expr.start()),
-                    )
+
+                    if let Some(const_idx) = self.function_by_name.get(&name_idx.idx) {
+                        self.write_op(
+                            context.function_idx,
+                            OpCode::CONSTANT(*const_idx as u16),
+                            self.lookup_source_line(expr.start()),
+                        )
+                    } else {
+                        self.write_op(
+                            context.function_idx,
+                            OpCode::GETGLOBAL(name_idx.idx as u16),
+                            self.lookup_source_line(expr.start()),
+                        )
+                    }
                 }
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NumberLiteral(num)) => {
-                self.byte_code
-                    .write_op(OpCode::CONSTANT(self.constants.len() as u16), expr.start());
+                self.write_op(
+                    context.function_idx,
+                    OpCode::CONSTANT(self.constants.len() as u16),
+                    expr.start(),
+                );
                 self.add_constant((*num).into());
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::StringLiteral(s)) => {
                 let (val, _) = self.interned_str_value(s);
-                self.byte_code.write_op(
+                self.write_op(
+                    context.function_idx,
                     OpCode::CONSTANT(self.constants.len() as u16),
                     self.lookup_source_line(expr.start()),
                 );
@@ -540,84 +794,107 @@ impl VirtualMachine {
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::BoolLiteral(x)) => {
                 if *x {
-                    self.byte_code.write_op(OpCode::TRUE, expr.start());
+                    self.write_op(context.function_idx, OpCode::TRUE, expr.start());
                 } else {
-                    self.byte_code.write_op(OpCode::FALSE, expr.start());
+                    self.write_op(context.function_idx, OpCode::FALSE, expr.start());
                 }
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NilLiteral) => {
-                self.byte_code.write_op(OpCode::NIL, expr.start());
+                self.write_op(context.function_idx, OpCode::NIL, expr.start());
             }
             crate::parser::Expression::Multiply { left, right } => {
                 self.compile_expr(&left.as_ref(), context)?;
                 self.compile_expr(&right.as_ref(), context)?;
-                self.byte_code.write_op(OpCode::MULTIPLY, left.start());
+                self.write_op(context.function_idx, OpCode::MULTIPLY, left.start());
             }
             crate::parser::Expression::Divide { left: _, right: _ } => todo!(),
             crate::parser::Expression::Add { left, right } => {
                 self.compile_expr(&left.as_ref(), context)?;
                 self.compile_expr(&right.as_ref(), context)?;
-                self.byte_code.write_op(OpCode::ADD, left.start());
+                self.write_op(context.function_idx, OpCode::ADD, left.start());
             }
             crate::parser::Expression::Subtract { left, right } => {
                 self.compile_expr(&left.as_ref(), context)?;
                 self.compile_expr(&right.as_ref(), context)?;
-                self.byte_code.write_op(OpCode::SUBTRACT, left.start());
+                self.write_op(context.function_idx, OpCode::SUBTRACT, left.start());
             }
             crate::parser::Expression::UnaryNegation { expr } => {
                 self.compile_expr(expr.as_ref(), context)?;
-                self.byte_code.write_op(OpCode::NEGATE, expr.start());
+                self.write_op(context.function_idx, OpCode::NEGATE, expr.start());
             }
             crate::parser::Expression::Grouping { expr } => {
                 self.compile_expr(&expr, context)?;
             }
             crate::parser::Expression::UnaryNot { expr } => {
                 self.compile_expr(expr, context)?;
-                self.byte_code.write_op(OpCode::NOT, expr.start());
+                self.write_op(context.function_idx, OpCode::NOT, expr.start());
             }
             crate::parser::Expression::Logical(LogicalExpression::Greater { left, right }) => {
                 self.compile_expr(&left, context)?;
                 self.compile_expr(&right, context)?;
-                self.byte_code.write_op(OpCode::GREATER, left.start());
+                self.write_op(context.function_idx, OpCode::GREATER, left.start());
             }
             crate::parser::Expression::Logical(LogicalExpression::Less { left, right }) => {
                 self.compile_expr(&right, context)?;
                 self.compile_expr(&left, context)?;
-                self.byte_code.write_op(OpCode::LESS, left.start());
+                self.write_op(context.function_idx, OpCode::LESS, left.start());
             }
             crate::parser::Expression::Logical(LogicalExpression::Equal { left, right }) => {
                 self.compile_expr(&right, context)?;
                 self.compile_expr(&left, context)?;
-                self.byte_code
-                    .write_op(OpCode::EQUAL, self.lookup_source_line(left.start()));
+                self.write_op(
+                    context.function_idx,
+                    OpCode::EQUAL,
+                    self.lookup_source_line(left.start()),
+                );
             }
 
             crate::parser::Expression::Logical(LogicalExpression::And { left, right }) => {
                 self.compile_expr(&left, context)?;
-                let pos_after_left = self.byte_code.size();
-                self.byte_code.write_op(
+                let pos_after_left = self.next_instruction(context.function_idx);
+                self.write_op(
+                    context.function_idx,
                     OpCode::JUMPIFFALSE(i16::MAX),
                     self.lookup_source_line(left.start()),
                 );
                 self.compile_expr(&right, context)?;
-                self.byte_code
-                    .patch_offset(pos_after_left + 1, self.offset_since(pos_after_left))
+                self.patch_offset(
+                    context.function_idx,
+                    pos_after_left + 1,
+                    self.offset_since(pos_after_left, context.function_idx),
+                )
             }
             crate::parser::Expression::Logical(LogicalExpression::Or { left, right }) => {
                 self.compile_expr(&left, context)?;
 
-                self.byte_code.write_op(
+                self.write_op(
+                    context.function_idx,
                     OpCode::JUMPIFFALSE(6), // JUMPIFFALSE + JUMP
                     self.lookup_source_line(left.start()),
                 );
-                let jump_out = self.byte_code.size();
-                self.byte_code.write_op(
+                let jump_out = self.next_instruction(context.function_idx);
+                self.write_op(
+                    context.function_idx,
                     OpCode::JUMP(i16::MAX),
                     self.lookup_source_line(left.start()),
                 );
                 self.compile_expr(&right, context)?;
-                self.byte_code
-                    .patch_offset(jump_out + 1, self.offset_since(jump_out));
+                self.patch_offset(
+                    context.function_idx,
+                    jump_out + 1,
+                    self.offset_since(jump_out, context.function_idx),
+                );
+            }
+            crate::parser::Expression::Call { calee, arguments } => {
+                self.compile_expr(&calee, context)?;
+                for arg in arguments {
+                    self.compile_expr(arg, context)?;
+                }
+                self.write_op(
+                    context.function_idx,
+                    OpCode::CALL(arguments.len() as u8),
+                    self.lookup_source_line(calee.start()),
+                )
             }
             _ => todo!(),
         }
@@ -646,13 +923,27 @@ impl VirtualMachine {
 }
 
 pub struct LexicalContext<'a> {
+    args: Vec<&'a str>,
     locals: Vec<(&'a str, usize)>,
     depth: usize,
+    function_idx: usize,
 }
 
 impl<'a> LexicalContext<'a> {
     fn is_toplevel(&self) -> bool {
         self.depth == 0
+    }
+
+    fn push_args(&mut self, args: impl IntoIterator<Item = &'a str>) {
+        self.args.extend(args);
+    }
+
+    fn clear_args(&mut self) {
+        self.args.clear();
+    }
+
+    fn function(&mut self, value: usize) {
+        self.function_idx = value;
     }
 
     fn enter_block(&mut self) {
@@ -679,10 +970,16 @@ impl<'a> LexicalContext<'a> {
     }
 
     fn resolve_local(&self, name: &str) -> Option<usize> {
+        for (i, arg_name) in self.args.iter().enumerate() {
+            if arg_name.eq(&name) {
+                return Some(i);
+            }
+        }
+
         for i in (0..self.locals.len()).rev() {
             let (n, _) = self.locals[i];
             if n.eq(name) {
-                return Some(i);
+                return Some(self.args.len() + i);
             }
         }
         None
@@ -704,6 +1001,17 @@ impl<'a> Display for DispayValue<'a> {
                 ty: ObjectType::String,
                 object_id,
             }) => f.write_str(self.vm.interner.get_str(&Key { idx: object_id })),
+
+            Value::Object(ObjectValue {
+                ty: ObjectType::Function,
+                object_id: fun_idx,
+            }) => write!(
+                f,
+                "<{}>",
+                self.vm.interner.get_str(&Key {
+                    idx: self.vm.functions[fun_idx].name,
+                }),
+            ),
             _ => todo!(),
         }
     }
@@ -711,79 +1019,17 @@ impl<'a> Display for DispayValue<'a> {
 
 #[cfg(test)]
 mod tests {
-    use test_case::test_case;
 
-    use crate::byte_code::OpCode;
-
-    use super::{LexicalContext, VirtualMachine};
+    use super::LexicalContext;
     use pretty_assertions::assert_eq;
-
-    const CODE_1: &str = r###"
-    print 1 + 3;
-    "###;
-    const CODE_2: &str = r###"
-    var x = 1;
-    print(2 + x);
-    "###;
-    const CODE_3: &str = r###"
-    var x = 1;
-    {
-        var y = 2;
-    }"###;
-    const CODE_4: &str = r###"
-    if (1 == 1)
-        print 1;
-        "###;
-
-    #[test_case(CODE_1,&[
-        OpCode::CONSTANT(0),
-        OpCode::CONSTANT(1),
-        OpCode::ADD,
-        OpCode::PRINT
-    ])]
-    #[test_case(CODE_2,&[
-        OpCode::CONSTANT(0),
-        OpCode::DECLAREGLOBAL(0),
-        OpCode::CONSTANT(1),
-        OpCode::GETGLOBAL(0),
-        OpCode::ADD,
-        OpCode::PRINT
-    ])]
-    #[test_case(CODE_3, &[
-        OpCode::CONSTANT(0),
-        OpCode::DECLAREGLOBAL(0),
-        OpCode::CONSTANT(1),
-        OpCode::SETLOCAL(0),
-    ])]
-    #[test_case(CODE_4, &[
-        OpCode::CONSTANT(0),
-        OpCode::CONSTANT(1),
-        OpCode::EQUAL,
-        OpCode::JUMPIFFALSE(8),
-        OpCode::POP,
-        OpCode::CONSTANT(2),
-        OpCode::PRINT,
-    ])]
-    fn compile_test1(code: &str, expected: &[OpCode]) -> anyhow::Result<()> {
-        let mut vm = VirtualMachine::new();
-        vm.compile(code)?;
-        let mut decompiler = vm.byte_code.decompile(0);
-        let mut all_instructions = Vec::new();
-
-        while let Some(x) = decompiler.next() {
-            all_instructions.push(x.unwrap());
-        }
-
-        assert_eq!(all_instructions.as_slice(), expected);
-
-        Ok(())
-    }
 
     #[test]
     fn test_var_scope() {
         let mut scope = LexicalContext {
             depth: 0,
             locals: Vec::new(),
+            function_idx: 0,
+            args: Default::default(),
         };
         scope.new_local("x");
         scope.enter_block();

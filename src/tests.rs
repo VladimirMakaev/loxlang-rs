@@ -52,6 +52,19 @@ pub fn test_for(code: &str) -> anyhow::Result<()> {
     verify_code(code)
 }
 
+const TOPLEVEL_PRINT: &'static str = include_str!("../tests/toplevel/print.lox");
+#[test_case(TOPLEVEL_PRINT)]
+pub fn test_toplevel(code: &str) -> anyhow::Result<()> {
+    verify_code(code)
+}
+
+const FUN_SYNTAX: &'static str = include_str!("../tests/fun/syntax.lox");
+
+#[test_case(FUN_SYNTAX)]
+pub fn test_fun(code: &str) -> anyhow::Result<()> {
+    verify_code(code)
+}
+
 fn verify_code(code: &str) -> anyhow::Result<()> {
     let mut vm = VirtualMachine::new();
     vm.compile(code)?;

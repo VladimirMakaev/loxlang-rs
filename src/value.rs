@@ -9,9 +9,19 @@ pub enum Value {
     Object(ObjectValue),
 }
 
+impl Value {
+    pub fn fun(fun_idx: usize) -> Value {
+        return Value::Object(ObjectValue {
+            object_id: fun_idx,
+            ty: ObjectType::Function,
+        });
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum ObjectType {
     String,
+    Function,
     _Class,
 }
 
@@ -24,6 +34,14 @@ pub struct ObjectValue {
 impl Value {
     pub fn as_number(&self) -> Option<f64> {
         if let Value::Number(x) = self {
+            Some(*x)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_object(&self) -> Option<ObjectValue> {
+        if let Value::Object(x) = self {
             Some(*x)
         } else {
             None

@@ -1,0 +1,24 @@
+fun one() {
+    return 1;
+}
+
+fun two() {
+    return 1 + one();
+}
+
+fun hello(x) {
+    print x;
+}
+
+fun rec(a){
+    if (a == 0){
+        return 0;
+    }
+    return rec(a - 1) + 1;
+}
+
+print 1 + one(); //expect: 2
+
+var x = two();
+hello(x); //expect: 2
+print rec(5); //expect: 5

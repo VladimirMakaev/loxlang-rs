@@ -160,6 +160,10 @@ pub enum Expression {
         expr: Box<AstExpression>,
     },
     Logical(LogicalExpression),
+    Call {
+        calee: Box<AstExpression>,
+        arguments: Vec<AstExpression>,
+    },
 }
 
 #[derive(Debug, strum::Display)]
@@ -169,9 +173,13 @@ pub enum Stmt {
     If(IfStmt),
     While(WhileStmt),
     For(ForStmt),
-    Block(Vec<AstStmt>),
+    Block(BlockStmt),
+    Return(AstExpression),
     Expression(AstExpression),
 }
+
+#[derive(Debug)]
+pub struct BlockStmt(pub(crate) Vec<AstStmt>);
 
 #[derive(Debug)]
 pub struct IfStmt {
@@ -199,6 +207,11 @@ pub enum StmtDeclaration {
     Variable {
         ident: AstIdent,
         expr: Option<AstExpression>,
+    },
+    Function {
+        name: AstIdent,
+        params: Vec<AstIdent>,
+        body: Box<AstStmt>,
     },
 }
 
@@ -322,7 +335,51 @@ impl<'source> Parser<'source> {
         if self.check_token(TokenType::VAR)? {
             return self.var_declaration();
         }
+
+        if self.check_token(TokenType::FUN)? {
+            return self.fun_declaration();
+        }
         self.statement()
+    }
+
+    fn fun_declaration(&mut self) -> StmtResult {
+        let fun_token = self.consume(TokenType::FUN)?;
+        let name = self.consume(TokenType::IDENTIFIER)?;
+        let name = name.slice(self.code).to_owned().ast(name.span());
+        let mut params = Vec::new();
+        self.consume(TokenType::LeftParen)?;
+
+        if !self.check_token(TokenType::RightParen)? {
+            loop {
+                if let Spanned {
+                    node: Expression::Identier(x),
+                    span,
+                } = self.identifier_contant()?
+                {
+                    params.push(x.ast(span));
+                } else {
+                    unreachable!()
+                }
+
+                if !self.check_token(TokenType::RightParen)? {
+                    self.consume(TokenType::Comma)?;
+                } else {
+                    break;
+                }
+            }
+        }
+        self.consume(TokenType::RightParen)?;
+
+        let block = self.block_statement()?;
+
+        let span = Span::new(fun_token.start(), block.end());
+
+        Ok(Stmt::Declarations(StmtDeclaration::Function {
+            name,
+            params: params,
+            body: Box::new(block),
+        })
+        .ast(span))
     }
 
     fn var_declaration(&mut self) -> StmtResult {
@@ -363,6 +420,10 @@ impl<'source> Parser<'source> {
             return self.print_statement();
         }
 
+        if self.check_token(TokenType::RETURN)? {
+            return self.return_statement();
+        }
+
         if self.check_token(TokenType::IF)? {
             return self.if_statement();
         }
@@ -393,6 +454,14 @@ impl<'source> Parser<'source> {
         Ok(Stmt::Print(expr).ast(span))
     }
 
+    fn return_statement(&mut self) -> StmtResult {
+        let return_token = self.consume(TokenType::RETURN)?;
+        let expr = self.expression()?;
+        let span = Span::new(return_token.start(), expr.end());
+        self.consume(TokenType::Semicolon)?;
+        Ok(Stmt::Return(expr).ast(span))
+    }
+
     fn check_token(&mut self, token_type: TokenType) -> Result<bool, ParseError> {
         match self.lexer.peek() {
             Some(Ok(t)) => Ok(t.ty() == token_type),
@@ -414,7 +483,7 @@ impl<'source> Parser<'source> {
 
     // fn match_tokens<const N: usize>(
     //     &mut self,
-    //     token_types: [TokenType; N],
+    //     token_types: &[TokenType; N],
     // ) -> Result<Option<Token>, ParseError> {
     //     match self.lexer.peek() {
     //         Some(Ok(t)) if token_types.iter().find(|x| t.ty().eq(x)).is_some() => {
@@ -476,6 +545,37 @@ impl<'source> Parser<'source> {
             expr: Box::new(result),
         }
         .ast(Span::new(l.start(), r.end())));
+    }
+
+    fn call(&mut self, left: AstExpression) -> ExprResult {
+        self.consume(TokenType::LeftParen)?;
+
+        match self.match_token(TokenType::RightParen)? {
+            Some(t) => {
+                let span = Span::new(left.start(), t.end());
+                return Ok(Expression::Call {
+                    calee: Box::new(left),
+                    arguments: Default::default(),
+                }
+                .ast(span));
+            }
+            None => {
+                let mut params = Vec::new();
+                loop {
+                    params.push(self.expression()?);
+                    if self.match_token(TokenType::Comma)?.is_some() {
+                        continue;
+                    }
+                    let t = self.consume(TokenType::RightParen)?;
+                    let span = Span::new(left.start(), t.end());
+                    return Ok(Expression::Call {
+                        calee: Box::new(left),
+                        arguments: params,
+                    }
+                    .ast(span));
+                }
+            }
+        }
     }
 
     fn unary(&mut self) -> ExprResult {
@@ -655,7 +755,7 @@ impl<'source> Parser<'source> {
             }
         }
         let right = self.consume(TokenType::RightBrace)?;
-        Ok(Stmt::Block(statements).ast(Span::new(left.start(), right.end())))
+        Ok(Stmt::Block(BlockStmt(statements)).ast(Span::new(left.start(), right.end())))
     }
 
     fn while_statement(&mut self) -> StmtResult {
@@ -756,7 +856,11 @@ impl<'source> Parser<'source> {
         Precedence,
     ) {
         match token {
-            TokenType::LeftParen => (Some(Box::new(Self::grouping)), None, Precedence::LOWEST),
+            TokenType::LeftParen => (
+                Some(Box::new(Self::grouping)),
+                Some(Box::new(Self::call)),
+                Precedence::HIGHEST,
+            ),
             TokenType::RightParen => (None, None, Precedence::NONE),
             TokenType::NIL => (Some(Box::new(Self::nil)), None, Precedence::NONE),
             TokenType::Bang => (Some(Box::new(Self::unary)), None, Precedence::UNARY),
@@ -809,6 +913,7 @@ impl<'source> Parser<'source> {
             TokenType::WHILE | TokenType::FOR => (None, None, Precedence::NONE),
             TokenType::AND => (None, Some(Box::new(Self::logical_and)), Precedence::AND),
             TokenType::OR => (None, Some(Box::new(Self::logical_or)), Precedence::AND),
+            TokenType::FUN | TokenType::Comma | TokenType::RETURN => (None, None, Precedence::NONE),
             _ => panic!("Not implemented token: {:?}", token),
         }
     }
@@ -894,6 +999,7 @@ mod tests {
             }
             Expression::Identier(_) => todo!(),
             Expression::Assignment { .. } => todo!(),
+            Expression::Call { .. } => todo!(),
         }
     }
 

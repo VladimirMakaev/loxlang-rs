@@ -102,7 +102,7 @@ fn main() -> anyhow::Result<()> {
         exit(65);
     }
     if opts.decompile {
-        println!("{}", vm.byte_code().decompile(0));
+        vm.decompile(&mut stdout())?;
         exit(0);
     }
     if let Err(err) = vm.run(&mut stdout()) {
