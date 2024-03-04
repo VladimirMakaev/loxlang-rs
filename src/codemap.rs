@@ -1,12 +1,16 @@
 use std::collections::BTreeMap;
 
 pub struct Codemap {
-    lines_start_at_1: bool,
-    position_starts_at_1: bool,
-    line_endings: BTreeMap<usize, usize>,
+    pub(crate) lines_start_at_1: bool,
+    pub(crate) position_starts_at_1: bool,
+    pub(crate) line_endings: BTreeMap<usize, usize>,
 }
 
 impl Codemap {
+    pub fn index(&mut self, code: &str) {
+        self.line_endings = Self::index_lines(code);
+    }
+
     pub fn new(code: &str) -> Self {
         Self {
             lines_start_at_1: true,

@@ -29,6 +29,10 @@ impl From<JumpOffset> for i16 {
 }
 
 impl ByteCode {
+    pub fn line(&self, ip: usize) -> usize {
+        self.lines[ip]
+    }
+    
     pub fn size(&self) -> usize {
         self.code.len()
     }

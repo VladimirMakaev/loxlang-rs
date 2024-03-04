@@ -13,6 +13,7 @@ use tracing::debug;
 
 use crate::{
     byte_code::{ByteCode, JumpOffset, OpCode, OpCodeError, OpCodeTypes},
+    codemap::Codemap,
     interner::{DefaultInterner, Interner, Key},
     parser::{
         AstExpression, AstStmt, Expression, ForStmt, IfStmt, LogicalExpression, ParseError, Parser,
@@ -42,6 +43,8 @@ pub enum VirtualMachineError {
         expected: ValueTypes,
         actual: ValueTypes,
     },
+    #[error("Can only call functions and classes.")]
+    InvalidCallee,
     #[error("Unhandled error: {0:?}")]
     Unhandled(#[from] anyhow::Error),
 }
@@ -77,6 +80,7 @@ pub struct VirtualMachine {
     functions: Vec<Function>,
     function_by_name: HashMap<usize, usize>,
     globals: HashMap<usize, Value>,
+    codemap: Codemap,
 }
 
 impl VirtualMachine {
@@ -90,6 +94,11 @@ impl VirtualMachine {
             frames: Default::default(),
             functions: Default::default(),
             function_by_name: Default::default(),
+            codemap: Codemap {
+                line_endings: Default::default(),
+                lines_start_at_1: true,
+                position_starts_at_1: false,
+            },
         }
     }
 
@@ -113,6 +122,7 @@ impl VirtualMachine {
     }
 
     pub fn compile(&mut self, code: &str) -> Result<(), VirtualMachineError> {
+        self.codemap.index(code);
         let mut parser = Parser::new(code);
         let smts = parser.parse();
         if parser.had_errors() {
@@ -231,6 +241,12 @@ impl VirtualMachine {
         self.frames[self.frame_idx].ip
     }
 
+    fn current_line(&self) -> usize {
+        self.functions[self.frames[self.frame_idx].function_idx]
+            .code
+            .line(self.ip())
+    }
+
     pub fn run<TOut: Write>(&mut self, stdout: &mut TOut) -> Result<(), VirtualMachineError> {
         self.frames.push(CallFrame {
             function_idx: 0,
@@ -243,12 +259,22 @@ impl VirtualMachine {
             match op_code {
                 OpCode::CONSTANT(idx) => {
                     let value = &self.constants[idx as usize].clone();
-                    debug!("@{} CONSTANT {}", self.ip(), self.as_display(value.clone()));
+                    debug!(
+                        "@{} CONSTANT {} [line: {}]",
+                        self.ip(),
+                        self.as_display(value.clone()),
+                        self.current_line()
+                    );
                     self.push(value.clone());
                 }
                 OpCode::POP => {
                     let val = self.pop()?;
-                    debug!("@{} POP {}", self.ip(), self.as_display(val));
+                    debug!(
+                        "@{} POP {} [line: {}]",
+                        self.ip(),
+                        self.as_display(val),
+                        self.current_line()
+                    );
                 }
                 OpCode::ADD => {
                     let right = self.pop()?;
@@ -257,7 +283,13 @@ impl VirtualMachine {
                     match (left, right) {
                         (Value::Number(left), Value::Number(right)) => {
                             self.push((left + right).into());
-                            debug!("@{} ADD {} {}", self.ip(), left, right);
+                            debug!(
+                                "@{} ADD {} {} [line: {}]",
+                                self.ip(),
+                                left,
+                                right,
+                                self.current_line()
+                            );
                         }
                         (
                             Value::Object(ObjectValue {
@@ -290,28 +322,55 @@ impl VirtualMachine {
                 OpCode::MULTIPLY => {
                     let left = self.pop_number(OpCodeTypes::MULTIPLY)?;
                     let right = self.pop_number(OpCodeTypes::MULTIPLY)?;
-                    debug!("@{} MULTIPLY {} {}", self.ip(), left, right);
+                    debug!(
+                        "@{} MULTIPLY {} {} [line: {}]",
+                        self.ip(),
+                        left,
+                        right,
+                        self.current_line()
+                    );
                     self.push((left * right).into());
                 }
                 OpCode::SUBTRACT => {
                     let right = self.pop_number(OpCodeTypes::MULTIPLY)?;
                     let left = self.pop_number(OpCodeTypes::MULTIPLY)?;
-                    debug!("@{} SUBTRACT {} {}", self.ip(), left, right);
+                    debug!(
+                        "@{} SUBTRACT {} {} [line: {}]",
+                        self.ip(),
+                        left,
+                        right,
+                        self.current_line()
+                    );
                     self.push((left - right).into());
                 }
                 OpCode::NEGATE => {
                     let value = self.pop_number(OpCodeTypes::NEGATE)?;
-                    debug!("@{} NEGATE {}", self.ip(), value);
+                    debug!(
+                        "@{} NEGATE {} [line: {}]",
+                        self.ip(),
+                        value,
+                        self.current_line()
+                    );
                     self.push((-value).into());
                 }
                 OpCode::NOT => {
                     let value = self.pop()?;
-                    debug!("@{} NOT {}", self.ip(), self.is_truthy(&value));
+                    debug!(
+                        "@{} NOT {} [line: {}]",
+                        self.ip(),
+                        self.is_truthy(&value),
+                        self.current_line()
+                    );
                     self.push((!self.is_truthy(&value)).into());
                 }
                 OpCode::PRINT => {
                     let value = self.pop()?;
-                    debug!("@{} PRINT {}", self.ip(), self.as_display(value.clone()));
+                    debug!(
+                        "@{} PRINT {} [line: {}]",
+                        self.ip(),
+                        self.as_display(value.clone()),
+                        self.current_line()
+                    );
                     writeln!(stdout, "{}", self.as_display(value)).map_err(anyhow::Error::msg)?;
                 }
                 OpCode::TRUE => self.push(true.into()),
@@ -320,47 +379,62 @@ impl VirtualMachine {
                 OpCode::GREATER => {
                     let right = self.pop_number(OpCodeTypes::GREATER)?;
                     let left = self.pop_number(OpCodeTypes::GREATER)?;
-                    debug!("@{} GREATER {} {}", self.ip(), left, right);
+                    debug!(
+                        "@{} GREATER {} {} [line: {}]",
+                        self.ip(),
+                        left,
+                        right,
+                        self.current_line()
+                    );
                     self.push((left > right).into());
                 }
                 OpCode::LESS => {
                     let left = self.pop_number(OpCodeTypes::LESS)?;
                     let right = self.pop_number(OpCodeTypes::LESS)?;
-                    debug!("@{} LESS {} {}", self.ip(), left, right);
+                    debug!(
+                        "@{} LESS {} {} [line: {}]",
+                        self.ip(),
+                        left,
+                        right,
+                        self.current_line()
+                    );
                     self.push((left < right).into());
                 }
                 OpCode::EQUAL => {
                     let right = self.pop()?;
                     let left = self.pop()?;
-                    
+
                     self.push(self.equal(&left, &right).into());
-                    
+
                     debug!(
-                        "@{} EQUAL {} {}",
+                        "@{} EQUAL {} {} [line: {}]",
                         self.ip(),
                         self.as_display(left),
-                        self.as_display(right)
+                        self.as_display(right),
+                        self.current_line()
                     );
                 }
                 OpCode::DECLAREGLOBAL(name_idx) => {
                     let init_value = self.pop()?;
                     debug!(
-                        "@{} DEFINE_GLOBAL {}={}",
+                        "@{} DEFINE_GLOBAL {}={} [line: {}]",
                         self.ip(),
                         self.interner.get_str(&Key {
                             idx: name_idx as usize
                         }),
                         self.as_display(init_value.clone()),
+                        self.current_line()
                     );
                     self.globals.insert(name_idx as usize, init_value);
                 }
                 OpCode::GETGLOBAL(name_idx) => {
                     debug!(
-                        "@{} GET_GLOBAL {}",
+                        "@{} GET_GLOBAL {} [line: {}]",
                         self.ip(),
                         self.interner.get_str(&Key {
                             idx: name_idx as usize
-                        })
+                        }),
+                        self.current_line()
                     );
                     let value = self
                         .globals
@@ -385,27 +459,34 @@ impl VirtualMachine {
                         return Err(VirtualMachineError::UndefinedVariable { name: name.into() });
                     }
                     debug!(
-                        "@{} SETGLOBAL {}={}",
+                        "@{} SETGLOBAL {}={} [line: {}]",
                         self.ip(),
                         name,
-                        self.as_display(new_value.clone())
+                        self.as_display(new_value.clone()),
+                        self.current_line()
                     );
 
                     self.globals.insert(name_idx as usize, new_value.clone());
                     self.push(new_value);
                 }
                 OpCode::GETLOCAL(stack_offset) => {
-                    debug!("@{} GETLOCAL {}", self.ip(), stack_offset);
+                    debug!(
+                        "@{} GETLOCAL {} [line: {}]",
+                        self.ip(),
+                        stack_offset,
+                        self.current_line()
+                    );
                     let slot = self.frames[self.frame_idx].locals_idx;
                     self.push(self.stack[slot + stack_offset as usize].clone());
                 }
                 OpCode::SETLOCAL(stack_offset) => {
                     let new_value = self.pop()?;
                     debug!(
-                        "@{} SETLOCAL {}={}",
+                        "@{} SETLOCAL {}={} [line: {}]",
                         self.ip(),
                         stack_offset,
-                        self.as_display(new_value.clone())
+                        self.as_display(new_value.clone()),
+                        self.current_line()
                     );
                     if self.stack.len() == stack_offset as usize {
                         self.push(new_value.clone());
@@ -415,7 +496,12 @@ impl VirtualMachine {
                     }
                 }
                 OpCode::JUMP(offset) => {
-                    debug!("@{} JUMP {}", self.ip(), offset);
+                    debug!(
+                        "@{} JUMP {} [line: {}]",
+                        self.ip(),
+                        offset,
+                        self.current_line()
+                    );
                     self.frames[self.frame_idx].inc_ip(offset as usize);
                     continue;
                 }
@@ -424,7 +510,13 @@ impl VirtualMachine {
 
                     let val_bool = self.is_truthy(&val);
 
-                    debug!("@{} JUMPIFFALSE {} cond = {}", self.ip(), offset, val_bool);
+                    debug!(
+                        "@{} JUMPIFFALSE {} cond = {} [line: {}]",
+                        self.ip(),
+                        offset,
+                        val_bool,
+                        self.current_line()
+                    );
 
                     if !val_bool {
                         self.frames[self.frame_idx].inc_ip(offset as usize);
@@ -432,7 +524,12 @@ impl VirtualMachine {
                     }
                 }
                 OpCode::LOOP(offset) => {
-                    debug!("@{} LOOP {}", self.ip(), offset);
+                    debug!(
+                        "@{} LOOP {} [line: {}]",
+                        self.ip(),
+                        offset,
+                        self.current_line()
+                    );
                     self.frames[self.frame_idx].dec_ip(offset as usize);
                     continue;
                 }
@@ -440,10 +537,11 @@ impl VirtualMachine {
                     let arg_count = arg_count as usize;
                     let function = &self.stack[self.stack.len() - arg_count - 1];
                     debug!(
-                        "@{} CALL {} arity = {}",
+                        "@{} CALL {} arity = {} [line: {}]",
                         self.ip(),
                         self.as_display(function.clone()),
-                        arg_count
+                        arg_count,
+                        self.current_line()
                     );
                     if let Value::Object(ObjectValue {
                         ty: ObjectType::Function,
@@ -459,19 +557,16 @@ impl VirtualMachine {
                         self.frame_idx += 1;
                         continue;
                     } else {
-                        return Err(anyhow!(
-                            "Expected function value on the stack, got {}",
-                            self.as_display(function.to_owned())
-                        )
-                        .into());
+                        return Err(VirtualMachineError::InvalidCallee);
                     }
                 }
                 OpCode::RET => {
                     let ret_value = self.pop()?;
                     debug!(
-                        "@{} RET = {}",
+                        "@{} RET = {} [line: {}]",
                         self.ip(),
-                        self.as_display(ret_value.clone())
+                        self.as_display(ret_value.clone()),
+                        self.current_line()
                     );
                     let fun = &self.functions[self.frames[self.frame_idx].function_idx];
                     self.stack.truncate(self.stack.len() - fun.arity - 1);
@@ -801,7 +896,7 @@ impl VirtualMachine {
                 self.write_op(
                     context.function_idx,
                     OpCode::CONSTANT(self.constants.len() as u16),
-                    expr.start(),
+                    self.lookup_source_line(expr.start()),
                 );
                 self.add_constant((*num).into());
             }
@@ -816,50 +911,90 @@ impl VirtualMachine {
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::BoolLiteral(x)) => {
                 if *x {
-                    self.write_op(context.function_idx, OpCode::TRUE, expr.start());
+                    self.write_op(
+                        context.function_idx,
+                        OpCode::TRUE,
+                        self.lookup_source_line(expr.start()),
+                    );
                 } else {
-                    self.write_op(context.function_idx, OpCode::FALSE, expr.start());
+                    self.write_op(
+                        context.function_idx,
+                        OpCode::FALSE,
+                        self.lookup_source_line(expr.start()),
+                    );
                 }
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NilLiteral) => {
-                self.write_op(context.function_idx, OpCode::NIL, expr.start());
+                self.write_op(
+                    context.function_idx,
+                    OpCode::NIL,
+                    self.lookup_source_line(expr.start()),
+                );
             }
             crate::parser::Expression::Multiply { left, right } => {
                 self.compile_expr(&left.as_ref(), context)?;
                 self.compile_expr(&right.as_ref(), context)?;
-                self.write_op(context.function_idx, OpCode::MULTIPLY, left.start());
+                self.write_op(
+                    context.function_idx,
+                    OpCode::MULTIPLY,
+                    self.lookup_source_line(left.start()),
+                );
             }
             crate::parser::Expression::Divide { left: _, right: _ } => todo!(),
             crate::parser::Expression::Add { left, right } => {
                 self.compile_expr(&left.as_ref(), context)?;
                 self.compile_expr(&right.as_ref(), context)?;
-                self.write_op(context.function_idx, OpCode::ADD, left.start());
+                self.write_op(
+                    context.function_idx,
+                    OpCode::ADD,
+                    self.lookup_source_line(left.start()),
+                );
             }
             crate::parser::Expression::Subtract { left, right } => {
                 self.compile_expr(&left.as_ref(), context)?;
                 self.compile_expr(&right.as_ref(), context)?;
-                self.write_op(context.function_idx, OpCode::SUBTRACT, left.start());
+                self.write_op(
+                    context.function_idx,
+                    OpCode::SUBTRACT,
+                    self.lookup_source_line(left.start()),
+                );
             }
             crate::parser::Expression::UnaryNegation { expr } => {
                 self.compile_expr(expr.as_ref(), context)?;
-                self.write_op(context.function_idx, OpCode::NEGATE, expr.start());
+                self.write_op(
+                    context.function_idx,
+                    OpCode::NEGATE,
+                    self.lookup_source_line(expr.start()),
+                );
             }
             crate::parser::Expression::Grouping { expr } => {
                 self.compile_expr(&expr, context)?;
             }
             crate::parser::Expression::UnaryNot { expr } => {
                 self.compile_expr(expr, context)?;
-                self.write_op(context.function_idx, OpCode::NOT, expr.start());
+                self.write_op(
+                    context.function_idx,
+                    OpCode::NOT,
+                    self.lookup_source_line(expr.start()),
+                );
             }
             crate::parser::Expression::Logical(LogicalExpression::Greater { left, right }) => {
                 self.compile_expr(&left, context)?;
                 self.compile_expr(&right, context)?;
-                self.write_op(context.function_idx, OpCode::GREATER, left.start());
+                self.write_op(
+                    context.function_idx,
+                    OpCode::GREATER,
+                    self.lookup_source_line(left.start()),
+                );
             }
             crate::parser::Expression::Logical(LogicalExpression::Less { left, right }) => {
                 self.compile_expr(&right, context)?;
                 self.compile_expr(&left, context)?;
-                self.write_op(context.function_idx, OpCode::LESS, left.start());
+                self.write_op(
+                    context.function_idx,
+                    OpCode::LESS,
+                    self.lookup_source_line(left.start()),
+                );
             }
             crate::parser::Expression::Logical(LogicalExpression::Equal { left, right }) => {
                 self.compile_expr(&left, context)?;
@@ -953,7 +1088,7 @@ impl VirtualMachine {
     }
 
     fn lookup_source_line(&self, start: usize) -> usize {
-        return start; //todo lookup source table
+        self.codemap.line_at(start).unwrap_or(0)
     }
 }
 
