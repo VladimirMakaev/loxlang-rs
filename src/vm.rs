@@ -175,6 +175,21 @@ impl VirtualMachine {
         }
     }
 
+    fn equal(&self, left: &Value, right: &Value) -> bool {
+        match (left, right) {
+            (Value::Number(l), Value::Number(r)) => l == r,
+            (Value::Bool(l), Value::Bool(r)) => l == r,
+            (Value::Nil, Value::Nil) => true,
+            (Value::Object(l), Value::Object(r)) => match (l.ty, r.ty) {
+                (ObjectType::String, ObjectType::String) => l.object_id == r.object_id,
+                (ObjectType::Function, ObjectType::Function) => l.object_id == r.object_id,
+                (ObjectType::_Class, ObjectType::_Class) => l.object_id == r.object_id,
+                (_, _) => false,
+            },
+            (_, _) => false,
+        }
+    }
+
     fn define_function(&mut self, name: &str, arity: usize) -> Result<(), VirtualMachineError> {
         let idx = self.interner.intern_str(name).idx;
         if self.function_by_name.contains_key(&idx) {
@@ -292,7 +307,7 @@ impl VirtualMachine {
                 OpCode::NOT => {
                     let value = self.pop()?;
                     debug!("@{} NOT {}", self.ip(), self.is_truthy(&value));
-                    self.push(self.is_truthy(&value).into());
+                    self.push((!self.is_truthy(&value)).into());
                 }
                 OpCode::PRINT => {
                     let value = self.pop()?;
@@ -315,10 +330,17 @@ impl VirtualMachine {
                     self.push((left < right).into());
                 }
                 OpCode::EQUAL => {
-                    let left = self.pop_number(OpCodeTypes::EQUAL)?;
-                    let right = self.pop_number(OpCodeTypes::EQUAL)?;
-                    debug!("@{} EQUAL {} {}", self.ip(), left, right);
-                    self.push((left == right).into());
+                    let right = self.pop()?;
+                    let left = self.pop()?;
+                    
+                    self.push(self.equal(&left, &right).into());
+                    
+                    debug!(
+                        "@{} EQUAL {} {}",
+                        self.ip(),
+                        self.as_display(left),
+                        self.as_display(right)
+                    );
                 }
                 OpCode::DECLAREGLOBAL(name_idx) => {
                     let init_value = self.pop()?;
@@ -840,11 +862,25 @@ impl VirtualMachine {
                 self.write_op(context.function_idx, OpCode::LESS, left.start());
             }
             crate::parser::Expression::Logical(LogicalExpression::Equal { left, right }) => {
-                self.compile_expr(&right, context)?;
                 self.compile_expr(&left, context)?;
+                self.compile_expr(&right, context)?;
                 self.write_op(
                     context.function_idx,
                     OpCode::EQUAL,
+                    self.lookup_source_line(left.start()),
+                );
+            }
+            crate::parser::Expression::Logical(LogicalExpression::NotEqual { left, right }) => {
+                self.compile_expr(&left, context)?;
+                self.compile_expr(&right, context)?;
+                self.write_op(
+                    context.function_idx,
+                    OpCode::EQUAL,
+                    self.lookup_source_line(left.start()),
+                );
+                self.write_op(
+                    context.function_idx,
+                    OpCode::NOT,
                     self.lookup_source_line(left.start()),
                 );
             }
@@ -896,7 +932,6 @@ impl VirtualMachine {
                     self.lookup_source_line(calee.start()),
                 )
             }
-            _ => todo!(),
         }
 
         Ok(())
