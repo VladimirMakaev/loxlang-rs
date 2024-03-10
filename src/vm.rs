@@ -23,9 +23,22 @@ use crate::{
 };
 
 #[derive(Error, Debug)]
+pub enum RuntimeError {
+    #[error("Undefined variable '{name}'.")]
+    UndefinedVariable { name: String },
+    #[error("Can only call functions and classes.")]
+    InvalidCallee,
+}
+
+#[derive(Error, Debug)]
 pub enum VirtualMachineError {
     #[error("{0:?}")]
     CompileError(Vec<ParseError>),
+    #[error("{kind}\n{stacktrace}")]
+    RuntimeError {
+        kind: RuntimeError,
+        stacktrace: String,
+    },
     #[error("Opcode error: '{0}'")]
     OpCodeError(#[from] OpCodeError),
     #[error("Unexpected end of byte code sequence detected")]
@@ -33,8 +46,6 @@ pub enum VirtualMachineError {
     #[error("Expected operand on the stack but none found.")]
     MissingStackOperand,
 
-    #[error("Undefined variable '{name}'.")]
-    UndefinedVariable { name: String },
     #[error(
         "Instruction {instruction} expected stack operand of type '{expected}'. Got : '{actual}"
     )]
@@ -43,8 +54,7 @@ pub enum VirtualMachineError {
         expected: ValueTypes,
         actual: ValueTypes,
     },
-    #[error("Can only call functions and classes.")]
-    InvalidCallee,
+
     #[error("Unhandled error: {0:?}")]
     Unhandled(#[from] anyhow::Error),
 }
@@ -68,6 +78,10 @@ impl CallFrame {
 
     fn dec_ip(&mut self, offset: usize) {
         self.ip -= offset;
+    }
+
+    fn ip(&self) -> usize {
+        self.ip
     }
 }
 
@@ -129,7 +143,7 @@ impl VirtualMachine {
             return Err(VirtualMachineError::CompileError(parser.into_errors()));
         }
 
-        self.define_function("<script>", 0)?;
+        self.define_function("script", 0)?;
 
         let mut context = LexicalContext {
             depth: 0,
@@ -245,6 +259,27 @@ impl VirtualMachine {
         self.functions[self.frames[self.frame_idx].function_idx]
             .code
             .line(self.ip())
+    }
+
+    fn stacktrace_line(&self, frame: &CallFrame) -> String {
+        let fun_idx = frame.function_idx;
+        let fun = &self.functions[fun_idx];
+        format!(
+            "[line {}] in {}",
+            fun.code.line(frame.ip()),
+            self.interner.get_str(&Key { idx: fun.name })
+        )
+    }
+
+    fn stacktrace(&self) -> String {
+        let mut result = String::new();
+        for (f_idx, frame) in self.frames.iter().enumerate().rev() {
+            if f_idx != self.frame_idx {
+                result.push_str("\n");
+            }
+            result.push_str(&self.stacktrace_line(frame));
+        }
+        result
     }
 
     pub fn run<TOut: Write>(&mut self, stdout: &mut TOut) -> Result<(), VirtualMachineError> {
@@ -439,13 +474,16 @@ impl VirtualMachine {
                     let value = self
                         .globals
                         .get(&(name_idx as usize))
-                        .ok_or_else(|| VirtualMachineError::UndefinedVariable {
-                            name: self
-                                .interner
-                                .get_str(&Key {
-                                    idx: name_idx as usize,
-                                })
-                                .into(),
+                        .ok_or_else(|| VirtualMachineError::RuntimeError {
+                            kind: RuntimeError::UndefinedVariable {
+                                name: self
+                                    .interner
+                                    .get_str(&Key {
+                                        idx: name_idx as usize,
+                                    })
+                                    .into(),
+                            },
+                            stacktrace: self.stacktrace(),
                         })?
                         .clone();
                     self.push(value);
@@ -456,7 +494,10 @@ impl VirtualMachine {
                         idx: name_idx as usize,
                     });
                     if !self.globals.contains_key(&(name_idx as usize)) {
-                        return Err(VirtualMachineError::UndefinedVariable { name: name.into() });
+                        return Err(VirtualMachineError::RuntimeError {
+                            kind: RuntimeError::UndefinedVariable { name: name.into() },
+                            stacktrace: self.stacktrace(),
+                        });
                     }
                     debug!(
                         "@{} SETGLOBAL {}={} [line: {}]",
@@ -548,7 +589,7 @@ impl VirtualMachine {
                         object_id: function_idx,
                     }) = function
                     {
-                        self.frames[self.frame_idx].inc_ip(size);
+                        //self.frames[self.frame_idx].inc_ip(size);
                         self.frames.push(CallFrame {
                             ip: 0,
                             function_idx: *function_idx,
@@ -557,7 +598,10 @@ impl VirtualMachine {
                         self.frame_idx += 1;
                         continue;
                     } else {
-                        return Err(VirtualMachineError::InvalidCallee);
+                        return Err(VirtualMachineError::RuntimeError {
+                            kind: RuntimeError::InvalidCallee,
+                            stacktrace: self.stacktrace(),
+                        });
                     }
                 }
                 OpCode::RET => {
@@ -573,6 +617,8 @@ impl VirtualMachine {
                     self.frames.pop();
                     self.frame_idx -= 1;
                     self.stack.push(ret_value);
+                    self.frames[self.frame_idx].inc_ip(2); // add sizeof call instruction
+
                     continue;
                 }
             }
