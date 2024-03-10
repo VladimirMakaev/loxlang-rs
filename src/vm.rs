@@ -215,17 +215,17 @@ impl VirtualMachine {
     }
 
     fn define_function(&mut self, name: &str, arity: usize) -> Result<(), VirtualMachineError> {
-        let idx = self.interner.intern_str(name).idx;
-        if self.function_by_name.contains_key(&idx) {
+        let name_idx = self.interner.intern_str(name).idx;
+        if self.function_by_name.contains_key(&name_idx) {
             Err(VirtualMachineError::Unhandled(anyhow!(
                 "Function with name {} has already been declared",
                 name
             )))
         } else {
-            self.function_by_name.insert(idx, self.constants.len());
+            self.function_by_name.insert(name_idx, self.functions.len());
             self.constants.push(Value::fun(self.functions.len()));
             self.functions.push(Function {
-                name: idx,
+                name: name_idx,
                 arity: arity,
                 code: ByteCode::default(),
             });
@@ -663,7 +663,32 @@ impl VirtualMachine {
                     )));
                 }
                 let fun_idx = context.function_idx;
+                self.write_op(
+                    context.function_idx,
+                    OpCode::CONSTANT(self.constants.len() as u16),
+                    self.lookup_source_line(name.start()),
+                );
+
+                let name_idx = self.interner.intern_str(&name.node()).idx;
+                if context.is_toplevel() {
+                    self.globals
+                        .insert(name_idx, Value::fun(self.functions.len()));
+                    self.write_op(
+                        context.function_idx,
+                        OpCode::DECLAREGLOBAL(name_idx as u16),
+                        self.lookup_source_line(name.start()),
+                    )
+                } else {
+                    let offset = context.new_local(name.node());
+                    self.write_op(
+                        context.function_idx,
+                        OpCode::SETLOCAL(offset as u16),
+                        self.lookup_source_line(name.start()),
+                    )
+                }
+
                 context.function(self.functions.len());
+
                 self.define_function(&name.node(), params.len())?;
                 context.push_args(["__current_fun__"]);
                 context.push_args(params.iter().map(|x| x.node().as_str()));
@@ -922,20 +947,11 @@ impl VirtualMachine {
                     )
                 } else {
                     let name_idx = self.interner.intern_str(name.as_str());
-
-                    if let Some(const_idx) = self.function_by_name.get(&name_idx.idx) {
-                        self.write_op(
-                            context.function_idx,
-                            OpCode::CONSTANT(*const_idx as u16),
-                            self.lookup_source_line(expr.start()),
-                        )
-                    } else {
-                        self.write_op(
-                            context.function_idx,
-                            OpCode::GETGLOBAL(name_idx.idx as u16),
-                            self.lookup_source_line(expr.start()),
-                        )
-                    }
+                    self.write_op(
+                        context.function_idx,
+                        OpCode::GETGLOBAL(name_idx.idx as u16),
+                        self.lookup_source_line(expr.start()),
+                    )
                 }
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NumberLiteral(num)) => {

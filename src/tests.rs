@@ -59,8 +59,13 @@ pub fn test_toplevel(code: &str) -> anyhow::Result<()> {
 }
 
 const FUN_SYNTAX: &'static str = include_str!("../tests/fun/syntax.lox");
+const FUN_MUTUAL_RECURSION: &'static str = include_str!("../tests/fun/mutual_recursion.lox");
+const FUN_MUTUAL_RECURSION_LOCAL: &'static str =
+    include_str!("../tests/fun/mutual_recursion_local.lox");
 
 #[test_case(FUN_SYNTAX)]
+#[test_case(FUN_MUTUAL_RECURSION)]
+#[test_case(FUN_MUTUAL_RECURSION_LOCAL)]
 pub fn test_fun(code: &str) -> anyhow::Result<()> {
     verify_code(code)
 }
@@ -69,14 +74,28 @@ fn verify_code(code: &str) -> anyhow::Result<()> {
     let mut vm = VirtualMachine::new();
     vm.compile(code)?;
     let mut stdout = Vec::<u8>::new();
-    vm.run(&mut stdout)?;
+    let res = vm.run(&mut stdout);
 
-    assert_eq!(
-        BufReader::new(stdout.as_slice())
-            .lines()
-            .collect::<Result<Vec<String>, std::io::Error>>()?,
-        collect_stdout_expectations(code),
-    );
+    match res {
+        Ok(_) => {
+            assert_eq!(
+                BufReader::new(stdout.as_slice())
+                    .lines()
+                    .collect::<Result<Vec<String>, std::io::Error>>()?,
+                collect_stdout_expectations(code),
+            );
+        }
+        Err(e) => {
+            let err_expectations = collect_stderr_expectations(code);
+            let err_message = e.to_string();
+            for expectation in err_expectations.into_iter() {
+                assert!(
+                    err_message.contains(&expectation),
+                    "Got:\n------------------\n{err_message}\n-----------------\nExpected to contain:\n---------------\n{expectation}\n--------------------"
+                );
+            }
+        }
+    }
 
     Ok(())
 }
@@ -84,6 +103,17 @@ fn verify_code(code: &str) -> anyhow::Result<()> {
 fn collect_stdout_expectations(code: &str) -> Vec<String> {
     let mut result = Vec::new();
     let regex = Regex::new("//[ ]*expect: ?(.*)").unwrap();
+    for capture in regex.captures_iter(code) {
+        if let Some(m) = capture.get(1) {
+            result.push(m.as_str().into());
+        }
+    }
+    result
+}
+
+fn collect_stderr_expectations(code: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let regex = Regex::new("//[ ]*expect runtime error: (.+)").unwrap();
     for capture in regex.captures_iter(code) {
         if let Some(m) = capture.get(1) {
             result.push(m.as_str().into());
