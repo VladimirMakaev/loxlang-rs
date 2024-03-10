@@ -1,3 +1,5 @@
+use crate::interner::StrId;
+
 #[derive(Clone, strum::EnumDiscriminants)]
 #[strum_discriminants(name(ValueTypes))]
 #[strum_discriminants(derive(strum::Display))]
@@ -6,6 +8,7 @@ pub enum Value {
     Number(f64),
     Bool(bool),
     Nil,
+    String(StrId),
     Object(ObjectValue),
 }
 
@@ -20,7 +23,6 @@ impl Value {
 
 #[derive(Clone, Copy)]
 pub enum ObjectType {
-    String,
     Function,
     _Class,
 }

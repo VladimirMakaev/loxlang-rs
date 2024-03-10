@@ -2,6 +2,8 @@ use std::{iter::repeat, mem::size_of};
 
 use byteorder::{ByteOrder, LittleEndian};
 
+use crate::interner::StrId;
+
 #[derive(thiserror::Error, Debug)]
 pub enum OpCodeError {
     #[error("Received incorrect opcode {opcode} that doesn't match any known opcode")]
@@ -32,7 +34,7 @@ impl ByteCode {
     pub fn line(&self, ip: usize) -> usize {
         self.lines[ip]
     }
-    
+
     pub fn size(&self) -> usize {
         self.code.len()
     }
@@ -62,11 +64,11 @@ impl ByteCode {
                 3
             }
             Some(OpCode::DECLAREGLOBAL(idx)) => {
-                *idx = self.read_u16(ip);
+                *idx = self.read_u16(ip).into();
                 3
             }
             Some(OpCode::SETGLOBAL(idx)) | Some(OpCode::GETGLOBAL(idx)) => {
-                *idx = self.read_u16(ip);
+                *idx = self.read_u16(ip).into();
                 3
             }
             Some(OpCode::GETLOCAL(idx)) | Some(OpCode::SETLOCAL(idx)) => {
@@ -114,8 +116,8 @@ impl ByteCode {
 
         let bytes_count = match op {
             OpCode::CONSTANT(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::DECLAREGLOBAL(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::GETGLOBAL(idx) | OpCode::SETGLOBAL(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::DECLAREGLOBAL(idx) => write_one_u16(&mut self.code, idx.as_u16()),
+            OpCode::GETGLOBAL(idx) | OpCode::SETGLOBAL(idx) => write_one_u16(&mut self.code, idx.as_u16()),
             OpCode::SETLOCAL(idx) | OpCode::GETLOCAL(idx) => write_one_u16(&mut self.code, idx),
             OpCode::JUMPIFFALSE(offset) | OpCode::JUMP(offset) | OpCode::LOOP(offset) => {
                 write_one_i16(&mut self.code, offset)
@@ -176,11 +178,11 @@ impl<'a> Iterator for ByteCodeSlice<'a> {
 #[repr(u8)]
 pub enum OpCode {
     CONSTANT(u16) = 1,
-    GETGLOBAL(u16),
-    SETGLOBAL(u16),
+    GETGLOBAL(StrId),
+    SETGLOBAL(StrId),
     SETLOCAL(u16),
     GETLOCAL(u16),
-    DECLAREGLOBAL(u16),
+    DECLAREGLOBAL(StrId),
     JUMP(i16),
     JUMPIFFALSE(i16),
     LOOP(i16),
@@ -212,13 +214,17 @@ mod tests {
         let mut bytes = ByteCode::default();
         bytes.write_op(OpCode::ADD, 1);
         bytes.write_op(OpCode::CONSTANT(20), 2);
-        bytes.write_op(OpCode::GETGLOBAL(30), 3);
+        bytes.write_op(OpCode::GETGLOBAL(30.into()), 3);
         let (x1, s1) = bytes.read_next(0).unwrap().unwrap();
         let (x2, s2) = bytes.read_next(s1).unwrap().unwrap();
         let (x3, _) = bytes.read_next(s1 + s2).unwrap().unwrap();
         assert_eq!(
             vec![x1, x2, x3],
-            vec![OpCode::ADD, OpCode::CONSTANT(20), OpCode::GETGLOBAL(30)]
+            vec![
+                OpCode::ADD,
+                OpCode::CONSTANT(20),
+                OpCode::GETGLOBAL(30.into())
+            ]
         );
         assert_eq!(bytes.lines, vec![1, 2, 2, 2, 3, 3, 3])
     }

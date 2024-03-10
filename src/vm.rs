@@ -14,7 +14,7 @@ use tracing::debug;
 use crate::{
     byte_code::{ByteCode, JumpOffset, OpCode, OpCodeError, OpCodeTypes},
     codemap::Codemap,
-    interner::{DefaultInterner, Interner, Key},
+    interner::{DefaultInterner, Interner, StrId},
     parser::{
         AstExpression, AstStmt, Expression, ForStmt, IfStmt, LogicalExpression, ParseError, Parser,
         StmtDeclaration, WhileStmt,
@@ -62,7 +62,7 @@ pub enum VirtualMachineError {
 }
 
 struct Function {
-    name: usize,
+    name: StrId,
     arity: usize,
     code: ByteCode,
 }
@@ -94,8 +94,8 @@ pub struct VirtualMachine {
     stack: Vec<Value>,
     constants: Vec<Value>,
     functions: Vec<Function>,
-    function_by_name: HashMap<usize, usize>,
-    globals: HashMap<usize, Value>,
+    function_by_name: HashMap<StrId, usize>,
+    globals: HashMap<StrId, Value>,
     codemap: Codemap,
 }
 
@@ -119,12 +119,12 @@ impl VirtualMachine {
     }
 
     pub fn decompile<TOut: Write>(&self, stdout: &mut TOut) -> Result<(), VirtualMachineError> {
-        for (name_idx, idx) in &self.function_by_name {
+        for (name_idx, constant_idx) in &self.function_by_name {
             write!(
                 stdout,
                 "{}:\n{}",
-                self.interner.get_str(&Key { idx: *name_idx }),
-                self.functions[self.constants[*idx]
+                self.interner.get_str(*name_idx),
+                self.functions[self.constants[*constant_idx]
                     .as_object()
                     .ok_or(VirtualMachineError::Unhandled(anyhow!("Expected function")))?
                     .object_id]
@@ -198,6 +198,7 @@ impl VirtualMachine {
             Value::Bool(x) => *x,
             Value::Nil => false,
             Value::Object(_) => true,
+            Value::String(_) => true,
         }
     }
 
@@ -207,17 +208,17 @@ impl VirtualMachine {
             (Value::Bool(l), Value::Bool(r)) => l == r,
             (Value::Nil, Value::Nil) => true,
             (Value::Object(l), Value::Object(r)) => match (l.ty, r.ty) {
-                (ObjectType::String, ObjectType::String) => l.object_id == r.object_id,
                 (ObjectType::Function, ObjectType::Function) => l.object_id == r.object_id,
                 (ObjectType::_Class, ObjectType::_Class) => l.object_id == r.object_id,
                 (_, _) => false,
             },
+            (Value::String(l), Value::String(r)) => l == r,
             (_, _) => false,
         }
     }
 
     fn define_function(&mut self, name: &str, arity: usize) -> Result<(), VirtualMachineError> {
-        let name_idx = self.interner.intern_str(name).idx;
+        let name_idx = self.interner.intern_str(name);
         if self.function_by_name.contains_key(&name_idx) {
             Err(VirtualMachineError::Unhandled(anyhow!(
                 "Function with name {} has already been declared",
@@ -269,7 +270,7 @@ impl VirtualMachine {
         format!(
             "[line {}] in {}",
             fun.code.line(frame.ip()),
-            self.interner.get_str(&Key { idx: fun.name })
+            self.interner.get_str(fun.name)
         )
     }
 
@@ -328,24 +329,11 @@ impl VirtualMachine {
                                 self.current_line()
                             );
                         }
-                        (
-                            Value::Object(ObjectValue {
-                                ty: ObjectType::String,
-                                object_id: ob_id_1,
-                            }),
-                            Value::Object(ObjectValue {
-                                ty: ObjectType::String,
-                                object_id: ob_id_2,
-                            }),
-                        ) => {
-                            let mut contatenate =
-                                String::from(self.interner.get_str(&Key { idx: ob_id_1 }));
-                            contatenate.push_str(self.interner.get_str(&Key { idx: ob_id_2 }));
+                        (Value::String(l), Value::String(r)) => {
+                            let mut contatenate = String::from(self.interner.get_str(l));
+                            contatenate.push_str(self.interner.get_str(r));
                             let result = self.interner.intern_string(contatenate);
-                            self.push(Value::Object(ObjectValue {
-                                ty: ObjectType::String,
-                                object_id: result.idx,
-                            }));
+                            self.push(Value::String(result));
                         }
                         (left, right) => {
                             return Err(VirtualMachineError::Unhandled(anyhow!(
@@ -456,34 +444,25 @@ impl VirtualMachine {
                     debug!(
                         "@{} DEFINE_GLOBAL {}={} [line: {}]",
                         self.ip(),
-                        self.interner.get_str(&Key {
-                            idx: name_idx as usize
-                        }),
+                        self.interner.get_str(name_idx),
                         self.as_display(init_value.clone()),
                         self.current_line()
                     );
-                    self.globals.insert(name_idx as usize, init_value);
+                    self.globals.insert(name_idx, init_value);
                 }
                 OpCode::GETGLOBAL(name_idx) => {
                     debug!(
                         "@{} GET_GLOBAL {} [line: {}]",
                         self.ip(),
-                        self.interner.get_str(&Key {
-                            idx: name_idx as usize
-                        }),
+                        self.interner.get_str(name_idx),
                         self.current_line()
                     );
                     let value = self
                         .globals
-                        .get(&(name_idx as usize))
+                        .get(&name_idx)
                         .ok_or_else(|| VirtualMachineError::RuntimeError {
                             kind: RuntimeErrorKind::UndefinedVariable {
-                                name: self
-                                    .interner
-                                    .get_str(&Key {
-                                        idx: name_idx as usize,
-                                    })
-                                    .into(),
+                                name: self.interner.get_str(name_idx).into(),
                             },
                             stacktrace: self.stacktrace(),
                         })?
@@ -492,10 +471,8 @@ impl VirtualMachine {
                 }
                 OpCode::SETGLOBAL(name_idx) => {
                     let new_value = self.pop()?;
-                    let name = self.interner.get_str(&Key {
-                        idx: name_idx as usize,
-                    });
-                    if !self.globals.contains_key(&(name_idx as usize)) {
+                    let name = self.interner.get_str(name_idx);
+                    if !self.globals.contains_key(&name_idx) {
                         return Err(VirtualMachineError::RuntimeError {
                             kind: RuntimeErrorKind::UndefinedVariable { name: name.into() },
                             stacktrace: self.stacktrace(),
@@ -509,7 +486,7 @@ impl VirtualMachine {
                         self.current_line()
                     );
 
-                    self.globals.insert(name_idx as usize, new_value.clone());
+                    self.globals.insert(name_idx, new_value.clone());
                     self.push(new_value);
                 }
                 OpCode::GETLOCAL(stack_offset) => {
@@ -667,7 +644,7 @@ impl VirtualMachine {
             }
 
             crate::parser::Stmt::Declarations(StmtDeclaration::Function { name, params, body }) => {
-                let str_id = self.interner.intern_str(&name.node()).idx;
+                let str_id = self.interner.intern_str(&name.node());
                 if self.function_by_name.contains_key(&str_id) {
                     return Err(VirtualMachineError::Unhandled(anyhow!(
                         "Duplicate function {} is declared",
@@ -675,19 +652,20 @@ impl VirtualMachine {
                     )));
                 }
                 let fun_idx = context.function_idx;
+
                 self.write_op(
                     context.function_idx,
                     OpCode::CONSTANT(self.constants.len() as u16),
                     self.lookup_source_line(name.start()),
                 );
 
-                let name_idx = self.interner.intern_str(&name.node()).idx;
+                let name_idx = self.interner.intern_str(&name.node());
                 if context.is_toplevel() {
                     self.globals
                         .insert(name_idx, Value::fun(self.functions.len()));
                     self.write_op(
                         context.function_idx,
-                        OpCode::DECLAREGLOBAL(name_idx as u16),
+                        OpCode::DECLAREGLOBAL(name_idx),
                         self.lookup_source_line(name.start()),
                     )
                 } else {
@@ -733,10 +711,10 @@ impl VirtualMachine {
                     );
                 }
                 if context.is_toplevel() {
-                    let ident_idx = self.interner.intern_str(ident.node()).idx;
+                    let ident_idx = self.interner.intern_str(ident.node());
                     self.write_op(
                         context.function_idx,
-                        OpCode::DECLAREGLOBAL((ident_idx) as u16),
+                        OpCode::DECLAREGLOBAL(ident_idx),
                         self.lookup_source_line(ident.start()),
                     );
                 } else {
@@ -941,10 +919,10 @@ impl VirtualMachine {
                             self.lookup_source_line(lvalue.start()),
                         )
                     } else {
-                        let idx = self.interner.intern_str(&name).idx;
+                        let idx = self.interner.intern_str(&name);
                         self.write_op(
                             context.function_idx,
-                            OpCode::SETGLOBAL(idx as u16),
+                            OpCode::SETGLOBAL(idx),
                             self.lookup_source_line(expr.start()),
                         );
                     }
@@ -961,7 +939,7 @@ impl VirtualMachine {
                     let name_idx = self.interner.intern_str(name.as_str());
                     self.write_op(
                         context.function_idx,
-                        OpCode::GETGLOBAL(name_idx.idx as u16),
+                        OpCode::GETGLOBAL(name_idx),
                         self.lookup_source_line(expr.start()),
                     )
                 }
@@ -975,7 +953,7 @@ impl VirtualMachine {
                 self.add_constant((*num).into());
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::StringLiteral(s)) => {
-                let (val, _) = self.interned_str_value(s);
+                let val = Value::String(self.interner.intern_str(s));
                 self.write_op(
                     context.function_idx,
                     OpCode::CONSTANT(self.constants.len() as u16),
@@ -1146,17 +1124,6 @@ impl VirtualMachine {
         Ok(())
     }
 
-    fn interned_str_value(&mut self, val: &str) -> (Value, usize) {
-        let idx = self.interner.intern_str(val).idx;
-        (
-            Value::Object(ObjectValue {
-                ty: ObjectType::String,
-                object_id: idx,
-            }),
-            idx,
-        )
-    }
-
     fn as_display(&self, value: Value) -> DispayValue {
         DispayValue { value, vm: self }
     }
@@ -1241,10 +1208,6 @@ impl<'a> Display for DispayValue<'a> {
             Value::Number(x) => write!(f, "{}", x),
             Value::Bool(x) => write!(f, "{}", x),
             Value::Nil => f.write_str("nil"),
-            Value::Object(ObjectValue {
-                ty: ObjectType::String,
-                object_id,
-            }) => f.write_str(self.vm.interner.get_str(&Key { idx: object_id })),
 
             Value::Object(ObjectValue {
                 ty: ObjectType::Function,
@@ -1252,10 +1215,9 @@ impl<'a> Display for DispayValue<'a> {
             }) => write!(
                 f,
                 "<{}>",
-                self.vm.interner.get_str(&Key {
-                    idx: self.vm.functions[fun_idx].name,
-                }),
+                self.vm.interner.get_str(self.vm.functions[fun_idx].name,),
             ),
+            Value::String(str_id) => f.write_str(self.vm.interner.get_str(str_id)),
             _ => todo!(),
         }
     }
