@@ -23,11 +23,13 @@ use crate::{
 };
 
 #[derive(Error, Debug)]
-pub enum RuntimeError {
+pub enum RuntimeErrorKind {
     #[error("Undefined variable '{name}'.")]
     UndefinedVariable { name: String },
     #[error("Can only call functions and classes.")]
     InvalidCallee,
+    #[error("Expected {expected} arguments but got {got}.")]
+    InvalidFunArity { got: usize, expected: usize },
 }
 
 #[derive(Error, Debug)]
@@ -36,7 +38,7 @@ pub enum VirtualMachineError {
     CompileError(Vec<ParseError>),
     #[error("{kind}\n{stacktrace}")]
     RuntimeError {
-        kind: RuntimeError,
+        kind: RuntimeErrorKind,
         stacktrace: String,
     },
     #[error("Opcode error: '{0}'")]
@@ -475,7 +477,7 @@ impl VirtualMachine {
                         .globals
                         .get(&(name_idx as usize))
                         .ok_or_else(|| VirtualMachineError::RuntimeError {
-                            kind: RuntimeError::UndefinedVariable {
+                            kind: RuntimeErrorKind::UndefinedVariable {
                                 name: self
                                     .interner
                                     .get_str(&Key {
@@ -495,7 +497,7 @@ impl VirtualMachine {
                     });
                     if !self.globals.contains_key(&(name_idx as usize)) {
                         return Err(VirtualMachineError::RuntimeError {
-                            kind: RuntimeError::UndefinedVariable { name: name.into() },
+                            kind: RuntimeErrorKind::UndefinedVariable { name: name.into() },
                             stacktrace: self.stacktrace(),
                         });
                     }
@@ -589,6 +591,16 @@ impl VirtualMachine {
                         object_id: function_idx,
                     }) = function
                     {
+                        let fun = &self.functions[*function_idx];
+                        if fun.arity != arg_count {
+                            return Err(VirtualMachineError::RuntimeError {
+                                kind: RuntimeErrorKind::InvalidFunArity {
+                                    got: arg_count,
+                                    expected: fun.arity,
+                                },
+                                stacktrace: self.stacktrace(),
+                            });
+                        }
                         //self.frames[self.frame_idx].inc_ip(size);
                         self.frames.push(CallFrame {
                             ip: 0,
@@ -599,7 +611,7 @@ impl VirtualMachine {
                         continue;
                     } else {
                         return Err(VirtualMachineError::RuntimeError {
-                            kind: RuntimeError::InvalidCallee,
+                            kind: RuntimeErrorKind::InvalidCallee,
                             stacktrace: self.stacktrace(),
                         });
                     }

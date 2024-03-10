@@ -36,6 +36,8 @@ pub enum ParseError {
     InvalidVariableName { span: Span },
     #[error("Invalid assignment target.")]
     InvalidAssignmentTarget { span: Span },
+    #[error("Can't have more than 255 arguments.")]
+    MaxFunctionCallArguments { span: Span },
 }
 
 pub trait Ast: Sized {
@@ -562,6 +564,11 @@ impl<'source> Parser<'source> {
             None => {
                 let mut params = Vec::new();
                 loop {
+                    if params.len() as u8 == u8::MAX {
+                        return Err(ParseError::MaxFunctionCallArguments {
+                            span: self.consume_next()?.span(),
+                        });
+                    }
                     params.push(self.expression()?);
                     if self.match_token(TokenType::Comma)?.is_some() {
                         continue;
