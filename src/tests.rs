@@ -62,10 +62,12 @@ const FUN_SYNTAX: &'static str = include_str!("../tests/fun/syntax.lox");
 const FUN_MUTUAL_RECURSION: &'static str = include_str!("../tests/fun/mutual_recursion.lox");
 const FUN_MUTUAL_RECURSION_LOCAL: &'static str =
     include_str!("../tests/fun/mutual_recursion_local.lox");
+const FUN_SIMPLE_RECURSION: &'static str = include_str!("../tests/fun/simple_recursion.lox");
 
 #[test_case(FUN_SYNTAX)]
 #[test_case(FUN_MUTUAL_RECURSION)]
 #[test_case(FUN_MUTUAL_RECURSION_LOCAL)]
+#[test_case(FUN_SIMPLE_RECURSION)]
 pub fn test_fun(code: &str) -> anyhow::Result<()> {
     verify_code(code)
 }
@@ -87,6 +89,9 @@ fn verify_code(code: &str) -> anyhow::Result<()> {
         }
         Err(e) => {
             let err_expectations = collect_stderr_expectations(code);
+            if err_expectations.is_empty() {
+                assert!(false, "Unexpected runtime error:\n\n{}", e);
+            }
             let err_message = e.to_string();
             for expectation in err_expectations.into_iter() {
                 assert!(

@@ -1,11 +1,18 @@
 use std::{
     collections::hash_map::DefaultHasher,
+    fmt::Debug,
     hash::{BuildHasher, BuildHasherDefault},
 };
 
-#[derive(PartialEq, Debug, Hash, Eq, Clone, Copy, Default)]
+#[derive(PartialEq, Hash, Eq, Clone, Copy, Default)]
 pub struct StrId {
     idx: u16,
+}
+
+impl Debug for StrId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "str:{}", self.idx)
+    }
 }
 
 impl StrId {
