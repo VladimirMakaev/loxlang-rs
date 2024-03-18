@@ -305,25 +305,29 @@ impl<'source> Parser<'source> {
         }
     }
 
-    fn consume(&mut self, token_type: TokenType) -> Result<Token, ParseError> {
+    fn consume_or_else(
+        &mut self,
+        token_type: TokenType,
+        f: impl FnOnce(&Token) -> ParseError,
+    ) -> Result<Token, ParseError> {
         match self.lexer.peek() {
             Some(Ok(t)) => {
                 if t.ty() == token_type {
                     Ok(self.lexer.next().unwrap()?)
                 } else {
-                    Err(ParseError::UnexpectedToken {
-                        span: t.span(),
-                        expectation: format!(
-                            "Expected {:?} got {}",
-                            token_type,
-                            t.slice(self.code)
-                        ),
-                    })
+                    Err(f(t))
                 }
             }
             Some(Err(_)) => Ok(self.lexer.next().unwrap()?),
             None => Err(ParseError::UnexpectedEof),
         }
+    }
+
+    fn consume(&mut self, token_type: TokenType) -> Result<Token, ParseError> {
+        self.consume_or_else(token_type, |t| ParseError::UnexpectedToken {
+            span: t.span(),
+            expectation: format!("Expected '{:?}' got '{}'", token_type, t.slice(self.code)),
+        })
     }
 
     fn next_declaration(&mut self) -> Option<StmtResult> {
@@ -359,7 +363,7 @@ impl<'source> Parser<'source> {
                 } = self.identifier_contant()?
                 {
                     if params.len() == u8::MAX as usize {
-                        return Err(ParseError::MaxFunDeclarationParameters { span: span });
+                        return Err(ParseError::MaxFunDeclarationParameters { span: span }.into());
                     }
 
                     params.push(x.ast(span));
@@ -368,7 +372,10 @@ impl<'source> Parser<'source> {
                 }
 
                 if !self.check_token(TokenType::RightParen)? {
-                    self.consume(TokenType::Comma)?;
+                    self.consume_or_else(TokenType::Comma, |t| ParseError::UnexpectedToken {
+                        span: t.span(),
+                        expectation: "Expect ')' after parameters.".to_owned(),
+                    })?;
                 } else {
                     break;
                 }
