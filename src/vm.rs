@@ -1291,7 +1291,7 @@ impl<'a> Display for DispayValue<'a> {
                 object_id: fun_idx,
             }) => write!(
                 f,
-                "<{}>",
+                "<fn {}>",
                 self.vm.interner.get_str(self.vm.functions[fun_idx].name,),
             ),
             Value::String(str_id) => f.write_str(self.vm.interner.get_str(str_id)),
