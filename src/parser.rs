@@ -38,6 +38,8 @@ pub enum ParseError {
     InvalidAssignmentTarget { span: Span },
     #[error("Can't have more than 255 arguments.")]
     MaxFunctionCallArguments { span: Span },
+    #[error("Can't have more than 255 parameters.")]
+    MaxFunDeclarationParameters { span: Span },
 }
 
 pub trait Ast: Sized {
@@ -358,6 +360,10 @@ impl<'source> Parser<'source> {
                     span,
                 } = self.identifier_contant()?
                 {
+                    if params.len() == u8::MAX as usize {
+                        return Err(ParseError::MaxFunDeclarationParameters { span: span });
+                    }
+
                     params.push(x.ast(span));
                 } else {
                     unreachable!()
@@ -755,7 +761,14 @@ impl<'source> Parser<'source> {
         let mut statements = Vec::new();
         if !self.check_token(TokenType::RightBrace)? {
             while let Some(next) = self.next_declaration() {
-                statements.push(next?);
+                match next {
+                    Ok(s) => statements.push(s),
+                    Err(e) => {
+                        self.syncronize();
+                        return Err(e);
+                    }
+                }
+
                 if self.check_token(TokenType::RightBrace)? {
                     break;
                 }

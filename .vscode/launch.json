@@ -18,7 +18,7 @@
                 }
             },
             "args": [
-                "/Users/vmakaev/Non-Work/craftinginterpreters/test/function/local_mutual_recursion.lox"
+                "/Users/vmakaev/Non-Work/craftinginterpreters/test/function/too_many_arguments.lox"
             ],
             "cwd": "${workspaceFolder}"
         },
