@@ -710,6 +710,7 @@ impl VirtualMachine {
                 }
 
                 context.function(
+                    name.node(),
                     self.functions.len(),
                     params.iter().map(|x| x.node().as_str()),
                 );
@@ -1193,12 +1194,17 @@ impl<'a> LexicalScope<'a> {
         }
     }
 
-    pub fn function(&mut self, function_idx: usize, args: impl IntoIterator<Item = &'a str>) {
+    pub fn function(
+        &mut self,
+        name: &'a str,
+        function_idx: usize,
+        args: impl IntoIterator<Item = &'a str>,
+    ) {
         let new = Self {
             parent: None,
             args: {
                 let mut a = Vec::new();
-                a.push("fun");
+                a.push(name);
                 a.extend(args);
                 a
             },
@@ -1310,8 +1316,9 @@ mod tests {
         assert_eq!(scope.new_local("x"), 2);
         assert_eq!(Some(2), scope.resolve_local("x"));
 
-        scope.function(1, ["a", "b"]);
+        scope.function("some_fun", 1, ["a", "b"]);
         assert_eq!(scope.new_local("x"), 3);
+        assert_eq!(Some(0), scope.resolve_local("some_fun"));
         assert_eq!(Some(3), scope.resolve_local("x"));
         assert_eq!(None, scope.resolve_local("y"));
         assert_eq!(Some(1), scope.resolve_local("a"));
