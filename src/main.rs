@@ -75,7 +75,7 @@ impl App {
                         parser::ParseError::ExpectedExpression { span } => {
                             Self::report_error_with_span(code, codemap, err_out, span, error)?
                         }
-                        parser::ParseError::MaxFunctionCallArguments { span } => {
+                        parser::ParseError::MaxFunCallArguments { span } => {
                             Self::report_error_with_span(code, codemap, err_out, span, error)?
                         }
                         parser::ParseError::MaxFunDeclarationParameters { span } => {

@@ -37,7 +37,7 @@ pub enum ParseError {
     #[error("Invalid assignment target.")]
     InvalidAssignmentTarget { span: Span },
     #[error("Can't have more than 255 arguments.")]
-    MaxFunctionCallArguments { span: Span },
+    MaxFunCallArguments { span: Span },
     #[error("Can't have more than 255 parameters.")]
     MaxFunDeclarationParameters { span: Span },
 }
@@ -571,7 +571,7 @@ impl<'source> Parser<'source> {
                 let mut params = Vec::new();
                 loop {
                     if params.len() as u8 == u8::MAX {
-                        return Err(ParseError::MaxFunctionCallArguments {
+                        return Err(ParseError::MaxFunCallArguments {
                             span: self.consume_next()?.span(),
                         });
                     }
