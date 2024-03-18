@@ -1,0 +1,27 @@
+fun sum(n) {
+    var a = 1;
+    if (n == 1){
+        return 1;
+    }
+    return a + sum(n-1);
+}
+
+fun pi(x){
+    var a = 1;
+    return a + x;
+}
+
+fun pi2(x) {
+    var b = 2;
+    return b + pi(x);
+}
+
+fun add(x, y){
+    "adsfasdf";
+    var a = 1;
+    return x + y + a;
+}
+
+print pi2(2); //expect: 5
+print sum(3); //expect: 3
+print add(10, 20); //expect: 31

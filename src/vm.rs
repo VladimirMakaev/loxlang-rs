@@ -3,6 +3,7 @@ use std::{
     fmt::{Display, Formatter},
     hash::BuildHasherDefault,
     io::Write,
+    mem,
 };
 
 use anyhow::anyhow;
@@ -67,6 +68,7 @@ struct Function {
     code: ByteCode,
 }
 
+#[derive(Debug)]
 struct CallFrame {
     function_idx: usize,
     ip: usize,
@@ -147,12 +149,7 @@ impl VirtualMachine {
 
         self.define_function("script", 0)?;
 
-        let mut context = LexicalContext {
-            depth: 0,
-            locals: Vec::new(),
-            function_idx: 0,
-            args: Default::default(),
-        };
+        let mut context = LexicalScope::root();
         for smt in smts.iter() {
             self.compile_statement(smt, &mut context)?;
         }
@@ -164,7 +161,6 @@ impl VirtualMachine {
     }
 
     fn push(&mut self, v: Value) {
-        debug!("on stack = {}", self.as_display(v.clone()));
         self.stack.push(v);
     }
 
@@ -285,6 +281,23 @@ impl VirtualMachine {
         result
     }
 
+    fn show_stack(&self, last_n: usize) -> String {
+        self.stack
+            .iter()
+            .enumerate()
+            .rev()
+            .take(last_n)
+            .map(|(i, x)| {
+                if i == self.frames[self.frame_idx].locals_idx {
+                    format!("{} <--", self.as_display(x.clone()))
+                } else {
+                    self.as_display(x.clone()).to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     pub fn run<TOut: Write>(&mut self, stdout: &mut TOut) -> Result<(), VirtualMachineError> {
         self.frames.push(CallFrame {
             function_idx: 0,
@@ -294,6 +307,7 @@ impl VirtualMachine {
 
         while let Some(x) = self.next_op() {
             let (op_code, size) = x?;
+            debug!("stack\n{}", self.show_stack(10));
             match op_code {
                 OpCode::CONSTANT(idx) => {
                     let value = &self.constants[idx as usize].clone();
@@ -306,13 +320,17 @@ impl VirtualMachine {
                     self.push(value.clone());
                 }
                 OpCode::POP => {
-                    let val = self.pop()?;
                     debug!(
                         "@{} POP {} [line: {}]",
                         self.ip(),
-                        self.as_display(val),
+                        {
+                            let val = self.peek().ok().clone();
+                            self.as_display(val.unwrap_or(crate::vm::Value::Nil))
+                        },
                         self.current_line()
                     );
+
+                    self.pop()?;
                 }
                 OpCode::ADD => {
                     let right = self.pop()?;
@@ -490,28 +508,31 @@ impl VirtualMachine {
                     self.push(new_value);
                 }
                 OpCode::GETLOCAL(stack_offset) => {
+                    let slot = self.frames[self.frame_idx].locals_idx;
+                    let v = self.stack[slot + stack_offset as usize].clone();
                     debug!(
-                        "@{} GETLOCAL {} [line: {}]",
+                        "@{} GETLOCAL {} [line: {}] = {}",
                         self.ip(),
                         stack_offset,
-                        self.current_line()
+                        self.current_line(),
+                        self.as_display(v.clone())
                     );
-                    let slot = self.frames[self.frame_idx].locals_idx;
-                    self.push(self.stack[slot + stack_offset as usize].clone());
+                    self.push(v);
                 }
-                OpCode::SETLOCAL(stack_offset) => {
+                OpCode::SETLOCAL(slot) => {
                     let new_value = self.pop()?;
                     debug!(
                         "@{} SETLOCAL {}={} [line: {}]",
                         self.ip(),
-                        stack_offset,
+                        slot,
                         self.as_display(new_value.clone()),
                         self.current_line()
                     );
-                    if self.stack.len() == stack_offset as usize {
+                    if self.stack.len() == self.frames[self.frame_idx].locals_idx + slot as usize {
                         self.push(new_value.clone());
                     } else {
-                        self.stack[stack_offset as usize] = new_value.clone();
+                        self.stack[self.frames[self.frame_idx].locals_idx + slot as usize] =
+                            new_value.clone();
                         self.push(new_value);
                     }
                 }
@@ -557,12 +578,24 @@ impl VirtualMachine {
                     let arg_count = arg_count as usize;
                     let function = &self.stack[self.stack.len() - arg_count - 1];
                     debug!(
-                        "@{} CALL {} arity = {} [line: {}]",
+                        "@{} CALL {}({}) [line: {}]",
                         self.ip(),
                         self.as_display(function.clone()),
-                        arg_count,
+                        (0..arg_count)
+                            .into_iter()
+                            .map(|i| {
+                                self.as_display(
+                                    (&self.stack[self.stack.len() - arg_count + i]).clone(),
+                                )
+                            })
+                            .map(|x| x.to_string())
+                            .collect::<Vec<_>>()
+                            .join(","),
                         self.current_line()
                     );
+                    //debug!("Last 5 values on stack:\n{}", self.show_stack(5));
+                    //debug!("frames:\n{:#?}", &self.frames);
+
                     if let Value::Object(ObjectValue {
                         ty: ObjectType::Function,
                         object_id: function_idx,
@@ -585,6 +618,7 @@ impl VirtualMachine {
                             locals_idx: self.stack.len() - arg_count - 1,
                         });
                         self.frame_idx += 1;
+                        //debug!("frames after call:\n{:#?}", &self.frames);
                         continue;
                     } else {
                         return Err(VirtualMachineError::RuntimeError {
@@ -595,14 +629,14 @@ impl VirtualMachine {
                 }
                 OpCode::RET => {
                     let ret_value = self.pop()?;
+                    //debug!("Last 5 values on stack:\n{}", self.show_stack(5));
                     debug!(
                         "@{} RET = {} [line: {}]",
                         self.ip(),
                         self.as_display(ret_value.clone()),
                         self.current_line()
                     );
-                    let fun = &self.functions[self.frames[self.frame_idx].function_idx];
-                    self.stack.truncate(self.stack.len() - fun.arity - 1);
+                    self.stack.truncate(self.frames[self.frame_idx].locals_idx);
                     self.frames.pop();
                     self.frame_idx -= 1;
                     self.stack.push(ret_value);
@@ -626,7 +660,7 @@ impl VirtualMachine {
     pub fn compile_statement<'a>(
         &mut self,
         stmt: &'a AstStmt,
-        context: &mut LexicalContext<'a>,
+        context: &mut LexicalScope<'a>,
     ) -> Result<(), VirtualMachineError> {
         match stmt.node() {
             crate::parser::Stmt::Print(expr) => {
@@ -651,8 +685,6 @@ impl VirtualMachine {
                         name.node()
                     )));
                 }
-                let fun_idx = context.function_idx;
-
                 self.write_op(
                     context.function_idx,
                     OpCode::CONSTANT(self.constants.len() as u16),
@@ -677,12 +709,12 @@ impl VirtualMachine {
                     )
                 }
 
-                context.function(self.functions.len());
+                context.function(
+                    self.functions.len(),
+                    params.iter().map(|x| x.node().as_str()),
+                );
 
                 self.define_function(&name.node(), params.len())?;
-                context.push_args(["__current_fun__"]);
-                context.push_args(params.iter().map(|x| x.node().as_str()));
-                context.enter_block();
                 self.compile_statement(&body, context)?;
                 self.write_op(
                     context.function_idx,
@@ -694,9 +726,7 @@ impl VirtualMachine {
                     OpCode::RET,
                     self.lookup_source_line(body.end()),
                 );
-                context.leave_block();
-                context.clear_args();
-                context.function(fun_idx);
+                context.leave_function();
                 Ok(())
             }
 
@@ -756,16 +786,13 @@ impl VirtualMachine {
                 );
 
                 self.compile_statement(then_block, context)?;
-
+                let jump_after_then = self.functions[context.function_idx].code.size();
+                self.write_op(
+                    context.function_idx,
+                    OpCode::JUMP(std::i16::MIN),
+                    self.lookup_source_line(stmt.start()),
+                );
                 if let Some(else_block) = else_block {
-                    let jump_after_then = self.functions[context.function_idx].code.size();
-
-                    self.write_op(
-                        context.function_idx,
-                        OpCode::JUMP(std::i16::MIN),
-                        self.lookup_source_line(stmt.start()),
-                    );
-
                     self.patch_offset(
                         context.function_idx,
                         jump_to_else + 1,
@@ -790,6 +817,16 @@ impl VirtualMachine {
                         context.function_idx,
                         jump_to_else + 1,
                         self.offset_since(jump_to_else, context.function_idx),
+                    );
+                    self.write_op(
+                        context.function_idx,
+                        OpCode::POP,
+                        self.lookup_source_line(stmt.end()),
+                    );
+                    self.patch_offset(
+                        context.function_idx,
+                        jump_after_then + 1,
+                        self.offset_since(jump_after_then, context.function_idx),
                     );
                 }
 
@@ -906,7 +943,7 @@ impl VirtualMachine {
     pub fn compile_expr(
         &mut self,
         expr: &AstExpression,
-        context: &mut LexicalContext,
+        context: &mut LexicalScope,
     ) -> Result<(), VirtualMachineError> {
         match expr.node() {
             crate::parser::Expression::Assignment { lvalue, rvalue } => {
@@ -1133,40 +1170,74 @@ impl VirtualMachine {
     }
 }
 
-pub struct LexicalContext<'a> {
+pub struct LexicalScope<'a> {
+    parent: Option<Box<LexicalScope<'a>>>,
     args: Vec<&'a str>,
     locals: Vec<(&'a str, usize)>,
-    depth: usize,
+    block_depth: usize,
     function_idx: usize,
 }
 
-impl<'a> LexicalContext<'a> {
+impl<'a> LexicalScope<'a> {
     fn is_toplevel(&self) -> bool {
-        self.depth == 0
+        self.block_depth == 0
     }
 
-    fn push_args(&mut self, args: impl IntoIterator<Item = &'a str>) {
-        self.args.extend(args);
+    pub fn root() -> Self {
+        Self {
+            parent: None,
+            args: Default::default(),
+            locals: Default::default(),
+            block_depth: 0,
+            function_idx: 0,
+        }
     }
 
-    fn clear_args(&mut self) {
-        self.args.clear();
+    pub fn function(&mut self, function_idx: usize, args: impl IntoIterator<Item = &'a str>) {
+        let new = Self {
+            parent: None,
+            args: {
+                let mut a = Vec::new();
+                a.push("fun");
+                a.extend(args);
+                a
+            },
+            block_depth: 0,
+            function_idx: function_idx,
+            locals: Default::default(),
+        };
+
+        let prev = mem::replace(self, new);
+        self.parent = Some(Box::new(prev));
     }
 
-    fn function(&mut self, value: usize) {
-        self.function_idx = value;
+    pub fn leave_function(&mut self) {
+        let parent = self.parent.take().expect("must have parent");
+        let Self {
+            args,
+            block_depth,
+            function_idx,
+            locals,
+            parent,
+        } = *parent;
+
+        self.args = args;
+        self.block_depth = block_depth;
+        self.function_idx = function_idx;
+        self.locals = locals;
+        self.parent = parent;
     }
 
     fn enter_block(&mut self) {
-        self.depth += 1;
+        self.block_depth += 1;
     }
 
     fn leave_block(&mut self) {
-        self.depth -= 1;
+        self.block_depth -= 1;
 
         loop {
             if let Some((_, d)) = self.locals.last() {
-                if *d > self.depth {
+                if *d > self.block_depth {
                     self.locals.pop();
                     continue;
                 }
@@ -1176,8 +1247,8 @@ impl<'a> LexicalContext<'a> {
     }
 
     fn new_local(&mut self, name: &'a str) -> usize {
-        self.locals.push((name, self.depth));
-        self.locals.len() - 1
+        self.locals.push((name, self.block_depth));
+        self.args.len() + self.locals.len() - 1
     }
 
     fn resolve_local(&self, name: &str) -> Option<usize> {
@@ -1226,21 +1297,26 @@ impl<'a> Display for DispayValue<'a> {
 #[cfg(test)]
 mod tests {
 
-    use super::LexicalContext;
     use pretty_assertions::assert_eq;
 
+    use crate::vm::LexicalScope;
+
     #[test]
-    fn test_var_scope() {
-        let mut scope = LexicalContext {
-            depth: 0,
-            locals: Vec::new(),
-            function_idx: 0,
-            args: Default::default(),
-        };
-        scope.new_local("x");
+    fn test_root_scope_locals() {
+        let mut scope = LexicalScope::root();
+        assert_eq!(scope.new_local("x"), 0);
         scope.enter_block();
-        scope.new_local("y");
-        scope.new_local("x");
+        assert_eq!(scope.new_local("y"), 1);
+        assert_eq!(scope.new_local("x"), 2);
         assert_eq!(Some(2), scope.resolve_local("x"));
+
+        scope.function(1, ["a", "b"]);
+        assert_eq!(scope.new_local("x"), 3);
+        assert_eq!(Some(3), scope.resolve_local("x"));
+        assert_eq!(None, scope.resolve_local("y"));
+        assert_eq!(Some(1), scope.resolve_local("a"));
+        scope.leave_function();
+        scope.leave_block();
+        assert_eq!(Some(0), scope.resolve_local("x"));
     }
 }

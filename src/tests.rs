@@ -63,11 +63,13 @@ const FUN_MUTUAL_RECURSION: &'static str = include_str!("../tests/fun/mutual_rec
 const FUN_MUTUAL_RECURSION_LOCAL: &'static str =
     include_str!("../tests/fun/mutual_recursion_local.lox");
 const FUN_SIMPLE_RECURSION: &'static str = include_str!("../tests/fun/simple_recursion.lox");
+const FUN_WITH_LOCALS: &'static str = include_str!("../tests/fun/fun_with_locals.lox");
 
 #[test_case(FUN_SYNTAX)]
 #[test_case(FUN_MUTUAL_RECURSION)]
 #[test_case(FUN_MUTUAL_RECURSION_LOCAL)]
 #[test_case(FUN_SIMPLE_RECURSION)]
+#[test_case(FUN_WITH_LOCALS)]
 pub fn test_fun(code: &str) -> anyhow::Result<()> {
     verify_code(code)
 }

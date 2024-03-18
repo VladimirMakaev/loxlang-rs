@@ -117,7 +117,9 @@ impl ByteCode {
         let bytes_count = match op {
             OpCode::CONSTANT(idx) => write_one_u16(&mut self.code, idx),
             OpCode::DECLAREGLOBAL(idx) => write_one_u16(&mut self.code, idx.as_u16()),
-            OpCode::GETGLOBAL(idx) | OpCode::SETGLOBAL(idx) => write_one_u16(&mut self.code, idx.as_u16()),
+            OpCode::GETGLOBAL(idx) | OpCode::SETGLOBAL(idx) => {
+                write_one_u16(&mut self.code, idx.as_u16())
+            }
             OpCode::SETLOCAL(idx) | OpCode::GETLOCAL(idx) => write_one_u16(&mut self.code, idx),
             OpCode::JUMPIFFALSE(offset) | OpCode::JUMP(offset) | OpCode::LOOP(offset) => {
                 write_one_i16(&mut self.code, offset)
