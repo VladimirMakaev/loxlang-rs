@@ -122,10 +122,6 @@ impl Token {
         self.token_type
     }
 
-    pub fn line(&self) -> usize {
-        self.line
-    }
-
     pub fn start(&self) -> usize {
         self.start
     }
@@ -204,7 +200,7 @@ mod tests {
         while let Some(Ok(t)) = l.next() {
             tokens.push(t.ty());
             values.push(t.slice(str));
-            lines.push(t.line());
+            lines.push(t.line);
         }
         assert_eq!(expected_token, tokens.as_slice());
 

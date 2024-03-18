@@ -7,13 +7,9 @@ use crate::lexer::{Lexer, LexerError, PosIdx, Token, TokenType};
 
 #[derive(Error, Debug)]
 pub enum ParseError {
-    #[error("Unexpected token {found:?} at {line}:{span:?}. Expected {expected:?}")]
-    UnexpectedToken {
-        expected: Vec<TokenType>,
-        line: usize,
-        span: Span,
-        found: TokenType,
-    },
+    #[error("{expectation}")]
+    UnexpectedToken { span: Span, expectation: String },
+
     #[error("Unexpected end of file")]
     UnexpectedEof,
     #[error("Number literal can't be converted to number")]
@@ -316,10 +312,12 @@ impl<'source> Parser<'source> {
                     Ok(self.lexer.next().unwrap()?)
                 } else {
                     Err(ParseError::UnexpectedToken {
-                        expected: vec![token_type],
-                        line: t.line(),
                         span: t.span(),
-                        found: t.ty(),
+                        expectation: format!(
+                            "Expected {:?} got {}",
+                            token_type,
+                            t.slice(self.code)
+                        ),
                     })
                 }
             }
@@ -377,6 +375,13 @@ impl<'source> Parser<'source> {
             }
         }
         self.consume(TokenType::RightParen)?;
+
+        if !self.check_token(TokenType::LeftBrace)? {
+            return Err(ParseError::UnexpectedToken {
+                span: self.consume_next()?.span(),
+                expectation: "Expect '{' before function body.".to_owned(),
+            });
+        }
 
         let block = self.block_statement()?;
 
@@ -682,10 +687,13 @@ impl<'source> Parser<'source> {
                 .ast(next.span()))
             }
             _ => Err(ParseError::UnexpectedToken {
-                expected: vec![TokenType::NUMBER, TokenType::STRING],
-                line: next.line(),
                 span: next.span(),
-                found: next.ty(),
+                expectation: format!(
+                    "Expected either {:?} or {:?}. Got {}",
+                    TokenType::NUMBER,
+                    TokenType::Star,
+                    next.slice(self.code)
+                ),
             }),
         }
     }
