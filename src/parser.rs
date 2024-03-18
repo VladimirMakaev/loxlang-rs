@@ -6,6 +6,20 @@ use thiserror::Error;
 use crate::lexer::{Lexer, LexerError, PosIdx, Token, TokenType};
 
 #[derive(Error, Debug)]
+#[error("{errors:?}")]
+pub struct StmtError {
+    errors: Vec<ParseError>,
+}
+
+impl From<ParseError> for StmtError {
+    fn from(value: ParseError) -> Self {
+        Self {
+            errors: vec![value],
+        }
+    }
+}
+
+#[derive(Error, Debug)]
 pub enum ParseError {
     #[error("{expectation}")]
     UnexpectedToken { span: Span, expectation: String },
@@ -36,6 +50,12 @@ pub enum ParseError {
     MaxFunCallArguments { span: Span },
     #[error("Can't have more than 255 parameters.")]
     MaxFunDeclarationParameters { span: Span },
+}
+
+impl Into<Vec<ParseError>> for ParseError {
+    fn into(self) -> Vec<ParseError> {
+        vec![self]
+    }
 }
 
 pub trait Ast: Sized {
@@ -222,7 +242,7 @@ pub struct Parser<'source> {
 }
 
 type ExprResult = Result<AstExpression, ParseError>;
-type StmtResult = Result<AstStmt, ParseError>;
+type StmtResult = Result<AstStmt, StmtError>;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, EnumIter)]
@@ -279,7 +299,7 @@ impl<'source> Parser<'source> {
             match next_stmt_result {
                 Ok(stmt) => result.push(stmt),
                 Err(e) => {
-                    self.errors.push(e);
+                    self.errors.extend(e.errors);
                     self.syncronize();
                 }
             }
@@ -387,7 +407,8 @@ impl<'source> Parser<'source> {
             return Err(ParseError::UnexpectedToken {
                 span: self.consume_next()?.span(),
                 expectation: "Expect '{' before function body.".to_owned(),
-            });
+            }
+            .into());
         }
 
         let block = self.block_statement()?;
