@@ -674,6 +674,11 @@ impl VirtualMachine {
             }
             crate::parser::Stmt::Expression(expr) => {
                 self.compile_expr(expr, context)?;
+                self.write_op(
+                    context.function_idx,
+                    OpCode::POP,
+                    self.lookup_source_line(expr.end()),
+                );
                 Ok(())
             }
 
