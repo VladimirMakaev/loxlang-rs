@@ -10,7 +10,7 @@ pub enum OpCodeError {
     _InvalidOpCode { opcode: u8 },
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ByteCode {
     code: Vec<u8>,
     lines: Vec<usize>,

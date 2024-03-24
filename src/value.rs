@@ -1,4 +1,4 @@
-use crate::interner::StrId;
+use crate::{byte_code::ByteCode, interner::StrId};
 
 #[derive(Clone, strum::EnumDiscriminants)]
 #[strum_discriminants(name(ValueTypes))]
@@ -10,6 +10,8 @@ pub enum Value {
     Nil,
     String(StrId),
     Object(ObjectValue),
+    Function(FunctionValue),
+    Closure(ClosureValue),
 }
 
 impl Value {
@@ -25,6 +27,16 @@ impl Value {
 pub enum ObjectType {
     Function,
     _Class,
+}
+
+#[derive(Clone)]
+pub struct FunctionValue {
+    function_id: usize,
+}
+
+#[derive(Clone, Copy)]
+pub struct ClosureValue {
+    closure_id: usize,
 }
 
 #[derive(Clone, Copy)]

@@ -18,7 +18,8 @@
                 }
             },
             "args": [
-                "/Users/vmakaev/Non-Work/craftinginterpreters/test/function/too_many_arguments.lox"
+                "--decompile",
+                "tests/fun/fun_with_locals.lox"
             ],
             "cwd": "${workspaceFolder}"
         },

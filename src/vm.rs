@@ -66,6 +66,7 @@ struct Function {
     name: StrId,
     arity: usize,
     code: ByteCode,
+    upvalue_count: usize,
 }
 
 #[derive(Debug)]
@@ -121,17 +122,12 @@ impl VirtualMachine {
     }
 
     pub fn decompile<TOut: Write>(&self, stdout: &mut TOut) -> Result<(), VirtualMachineError> {
-        for (name_idx, constant_idx) in &self.function_by_name {
+        for (name_idx, function_idx) in &self.function_by_name {
             write!(
                 stdout,
                 "{}:\n{}",
                 self.interner.get_str(*name_idx),
-                self.functions[self.constants[*constant_idx]
-                    .as_object()
-                    .ok_or(VirtualMachineError::Unhandled(anyhow!("Expected function")))?
-                    .object_id]
-                    .code
-                    .decompile(0)
+                self.functions[*function_idx].code.decompile(0)
             )
             .map_err(|e| VirtualMachineError::Unhandled(e.into()))?
         }
@@ -147,12 +143,13 @@ impl VirtualMachine {
             return Err(VirtualMachineError::CompileError(parser.into_errors()));
         }
 
-        self.define_function("script", 0)?;
-
+        let mut result = ByteCode::default();
         let mut context = LexicalScope::root();
+        self.define_function("script", 0, 0, ByteCode::default())?;
         for smt in smts.iter() {
-            self.compile_statement(smt, &mut context)?;
+            self.compile_statement(smt, &mut context, &mut result)?;
         }
+        self.functions[0].code = result;
         Ok(())
     }
 
@@ -195,6 +192,8 @@ impl VirtualMachine {
             Value::Nil => false,
             Value::Object(_) => true,
             Value::String(_) => true,
+            Value::Function(_) => todo!(),
+            Value::Closure(_) => todo!(),
         }
     }
 
@@ -213,7 +212,13 @@ impl VirtualMachine {
         }
     }
 
-    fn define_function(&mut self, name: &str, arity: usize) -> Result<(), VirtualMachineError> {
+    fn define_function(
+        &mut self,
+        name: &str,
+        arity: usize,
+        upvalue_count: usize,
+        code: ByteCode,
+    ) -> Result<(), VirtualMachineError> {
         let name_idx = self.interner.intern_str(name);
         if self.function_by_name.contains_key(&name_idx) {
             Err(VirtualMachineError::Unhandled(anyhow!(
@@ -226,22 +231,19 @@ impl VirtualMachine {
             self.functions.push(Function {
                 name: name_idx,
                 arity: arity,
-                code: ByteCode::default(),
+                code,
+                upvalue_count,
             });
             Ok(())
         }
     }
 
-    fn write_op(&mut self, function_idx: usize, op: OpCode, line: usize) {
-        self.functions[function_idx].code.write_op(op, line);
+    pub fn next_instruction(&self, code: &ByteCode) -> usize {
+        code.size()
     }
 
-    pub fn next_instruction(&self, function_idx: usize) -> usize {
-        self.functions[function_idx].code.size()
-    }
-
-    pub fn offset_since(&self, ip: usize, function_idx: usize) -> JumpOffset {
-        JumpOffset::new(ip, self.next_instruction(function_idx))
+    pub fn offset_since(&self, ip: usize, code: &ByteCode) -> JumpOffset {
+        JumpOffset::new(ip, self.next_instruction(code))
     }
 
     fn next_op(&mut self) -> Option<Result<(OpCode, usize), OpCodeError>> {
@@ -651,34 +653,25 @@ impl VirtualMachine {
         Ok(())
     }
 
-    pub fn patch_offset(&mut self, function_idx: usize, addr: usize, new_offset: JumpOffset) {
-        self.functions[function_idx]
-            .code
-            .patch_offset(addr, new_offset);
+    pub fn patch_offset(&mut self, code: &mut ByteCode, addr: usize, new_offset: JumpOffset) {
+        code.patch_offset(addr, new_offset);
     }
 
     pub fn compile_statement<'a>(
         &mut self,
         stmt: &'a AstStmt,
         context: &mut LexicalScope<'a>,
+        result: &mut ByteCode,
     ) -> Result<(), VirtualMachineError> {
         match stmt.node() {
             crate::parser::Stmt::Print(expr) => {
-                self.compile_expr(expr, context)?;
-                self.write_op(
-                    context.function_idx,
-                    OpCode::PRINT,
-                    self.lookup_source_line(expr.start()),
-                );
+                self.compile_expr(expr, context, result)?;
+                result.write_op(OpCode::PRINT, self.lookup_source_line(expr.start()));
                 Ok(())
             }
             crate::parser::Stmt::Expression(expr) => {
-                self.compile_expr(expr, context)?;
-                self.write_op(
-                    context.function_idx,
-                    OpCode::POP,
-                    self.lookup_source_line(expr.end()),
-                );
+                self.compile_expr(expr, context, result)?;
+                result.write_op(OpCode::POP, self.lookup_source_line(expr.end()));
                 Ok(())
             }
 
@@ -690,8 +683,7 @@ impl VirtualMachine {
                         name.node()
                     )));
                 }
-                self.write_op(
-                    context.function_idx,
+                result.write_op(
                     OpCode::CONSTANT(self.constants.len() as u16),
                     self.lookup_source_line(name.start()),
                 );
@@ -700,63 +692,48 @@ impl VirtualMachine {
                 if context.is_toplevel() {
                     self.globals
                         .insert(name_idx, Value::fun(self.functions.len()));
-                    self.write_op(
-                        context.function_idx,
+                    result.write_op(
                         OpCode::DECLAREGLOBAL(name_idx),
                         self.lookup_source_line(name.start()),
                     )
                 } else {
                     let offset = context.new_local(name.node());
-                    self.write_op(
-                        context.function_idx,
+                    result.write_op(
                         OpCode::SETLOCAL(offset as u16),
                         self.lookup_source_line(name.start()),
                     )
                 }
+                let mut byte_code = ByteCode::default();
 
-                context.function(
+                context.function_decl(
                     name.node(),
                     self.functions.len(),
                     params.iter().map(|x| x.node().as_str()),
                 );
-
-                self.define_function(&name.node(), params.len())?;
-                self.compile_statement(&body, context)?;
-                self.write_op(
-                    context.function_idx,
-                    OpCode::NIL,
-                    self.lookup_source_line(body.end()),
-                );
-                self.write_op(
-                    context.function_idx,
-                    OpCode::RET,
-                    self.lookup_source_line(body.end()),
-                );
+                self.define_function(&name.node(), params.len(), 0, Default::default())?;
+                self.compile_statement(&body, context, &mut byte_code)?;
+                byte_code.write_op(OpCode::NIL, self.lookup_source_line(body.end()));
+                byte_code.write_op(OpCode::RET, self.lookup_source_line(body.end()));
+                self.functions[context.function_idx].code = byte_code;
                 context.leave_function();
                 Ok(())
             }
 
             crate::parser::Stmt::Declarations(StmtDeclaration::Variable { ident, expr }) => {
                 if let Some(e) = expr {
-                    self.compile_expr(e, context)?;
+                    self.compile_expr(e, context, result)?;
                 } else {
-                    self.write_op(
-                        context.function_idx,
-                        OpCode::NIL,
-                        self.lookup_source_line(ident.start()),
-                    );
+                    result.write_op(OpCode::NIL, self.lookup_source_line(ident.start()));
                 }
                 if context.is_toplevel() {
                     let ident_idx = self.interner.intern_str(ident.node());
-                    self.write_op(
-                        context.function_idx,
+                    result.write_op(
                         OpCode::DECLAREGLOBAL(ident_idx),
                         self.lookup_source_line(ident.start()),
                     );
                 } else {
                     let offset = context.new_local(ident.node());
-                    self.write_op(
-                        context.function_idx,
+                    result.write_op(
                         OpCode::SETLOCAL(offset as u16),
                         self.lookup_source_line(ident.start()),
                     )
@@ -766,7 +743,7 @@ impl VirtualMachine {
             crate::parser::Stmt::Block(block) => {
                 context.enter_block();
                 for each_stmt in block.0.iter() {
-                    self.compile_statement(each_stmt, context)?;
+                    self.compile_statement(each_stmt, context, result)?;
                 }
                 context.leave_block();
                 Ok(())
@@ -776,63 +753,49 @@ impl VirtualMachine {
                 then_block,
                 else_block,
             }) => {
-                self.compile_expr(condition, context)?;
-                let jump_to_else = self.next_instruction(context.function_idx); //
+                self.compile_expr(condition, context, result)?;
+                let jump_to_else = self.next_instruction(result); //
 
-                self.write_op(
-                    context.function_idx,
+                result.write_op(
                     OpCode::JUMPIFFALSE(std::i16::MIN),
                     self.lookup_source_line(stmt.start()),
                 );
 
-                self.write_op(
-                    context.function_idx,
-                    OpCode::POP,
-                    self.lookup_source_line(stmt.start()),
-                );
+                result.write_op(OpCode::POP, self.lookup_source_line(stmt.start()));
 
-                self.compile_statement(then_block, context)?;
-                let jump_after_then = self.functions[context.function_idx].code.size();
-                self.write_op(
-                    context.function_idx,
+                self.compile_statement(then_block, context, result)?;
+                let jump_after_then = result.size();
+                result.write_op(
                     OpCode::JUMP(std::i16::MIN),
                     self.lookup_source_line(stmt.start()),
                 );
                 if let Some(else_block) = else_block {
                     self.patch_offset(
-                        context.function_idx,
+                        result,
                         jump_to_else + 1,
-                        self.offset_since(jump_to_else, context.function_idx),
+                        self.offset_since(jump_to_else, &result),
                     );
 
-                    self.write_op(
-                        context.function_idx,
-                        OpCode::POP,
-                        self.lookup_source_line(stmt.start()),
-                    );
+                    result.write_op(OpCode::POP, self.lookup_source_line(stmt.start()));
 
-                    self.compile_statement(else_block, context)?;
+                    self.compile_statement(else_block, context, result)?;
 
                     self.patch_offset(
-                        context.function_idx,
+                        result,
                         jump_after_then + 1,
-                        self.offset_since(jump_after_then, context.function_idx),
+                        self.offset_since(jump_after_then, result),
                     );
                 } else {
                     self.patch_offset(
-                        context.function_idx,
+                        result,
                         jump_to_else + 1,
-                        self.offset_since(jump_to_else, context.function_idx),
+                        self.offset_since(jump_to_else, result),
                     );
-                    self.write_op(
-                        context.function_idx,
-                        OpCode::POP,
-                        self.lookup_source_line(stmt.end()),
-                    );
+                    result.write_op(OpCode::POP, self.lookup_source_line(stmt.end()));
                     self.patch_offset(
-                        context.function_idx,
+                        result,
                         jump_after_then + 1,
-                        self.offset_since(jump_after_then, context.function_idx),
+                        self.offset_since(jump_after_then, result),
                     );
                 }
 
@@ -842,38 +805,21 @@ impl VirtualMachine {
                 condition,
                 loop_block,
             }) => {
-                let start_of_loop = self.next_instruction(context.function_idx);
-                self.compile_expr(condition, context)?;
-                let jump_out = self.next_instruction(context.function_idx);
-                self.write_op(
-                    context.function_idx,
+                let start_of_loop = self.next_instruction(result);
+                self.compile_expr(condition, context, result)?;
+                let jump_out = self.next_instruction(result);
+                result.write_op(
                     OpCode::JUMPIFFALSE(i16::MAX),
                     self.lookup_source_line(condition.start()),
                 );
-                self.write_op(
-                    context.function_idx,
-                    OpCode::POP,
-                    self.lookup_source_line(condition.start()),
-                );
-                self.compile_statement(loop_block, context)?;
-                self.write_op(
-                    context.function_idx,
-                    OpCode::LOOP(
-                        self.offset_since(start_of_loop, context.function_idx)
-                            .into(),
-                    ),
+                result.write_op(OpCode::POP, self.lookup_source_line(condition.start()));
+                self.compile_statement(loop_block, context, result)?;
+                result.write_op(
+                    OpCode::LOOP(self.offset_since(start_of_loop, result).into()),
                     self.lookup_source_line(loop_block.end()),
                 );
-                self.write_op(
-                    context.function_idx,
-                    OpCode::POP,
-                    self.lookup_source_line(loop_block.end()),
-                );
-                self.patch_offset(
-                    context.function_idx,
-                    jump_out + 1,
-                    self.offset_since(jump_out, context.function_idx),
-                );
+                result.write_op(OpCode::POP, self.lookup_source_line(loop_block.end()));
+                self.patch_offset(result, jump_out + 1, self.offset_since(jump_out, result));
                 Ok(())
             }
             crate::parser::Stmt::For(ForStmt {
@@ -883,64 +829,47 @@ impl VirtualMachine {
                 block,
             }) => {
                 if let Some(initializer) = initializer {
-                    self.compile_statement(initializer, context)?;
+                    self.compile_statement(initializer, context, result)?;
                 }
 
-                let when_loop_starts = self.next_instruction(context.function_idx);
+                let when_loop_starts = self.next_instruction(result);
                 let mut when_condition_fails = None;
 
                 if let Some(condition) = condition {
-                    self.compile_expr(condition, context)?;
-                    when_condition_fails = Some(self.next_instruction(context.function_idx));
-                    self.write_op(
-                        context.function_idx,
+                    self.compile_expr(condition, context, result)?;
+                    when_condition_fails = Some(self.next_instruction(result));
+                    result.write_op(
                         OpCode::JUMPIFFALSE(i16::MAX),
                         self.lookup_source_line(condition.start()),
                     );
-                    self.write_op(
-                        context.function_idx,
-                        OpCode::POP,
-                        self.lookup_source_line(condition.start()),
-                    );
+                    result.write_op(OpCode::POP, self.lookup_source_line(condition.start()));
                 }
 
-                self.compile_statement(block, context)?;
+                self.compile_statement(block, context, result)?;
 
                 if let Some(increment) = increment {
-                    self.compile_statement(increment, context)?;
+                    self.compile_statement(increment, context, result)?;
                 }
 
-                self.write_op(
-                    context.function_idx,
-                    OpCode::LOOP(
-                        self.offset_since(when_loop_starts, context.function_idx)
-                            .into(),
-                    ),
+                result.write_op(
+                    OpCode::LOOP(self.offset_since(when_loop_starts, result).into()),
                     self.lookup_source_line(block.end()),
                 );
 
                 if let Some(when_condition_fails) = when_condition_fails {
                     self.patch_offset(
-                        context.function_idx,
+                        result,
                         when_condition_fails + 1,
-                        self.offset_since(when_condition_fails, context.function_idx),
+                        self.offset_since(when_condition_fails, result),
                     );
                 }
-                self.write_op(
-                    context.function_idx,
-                    OpCode::POP,
-                    self.lookup_source_line(block.end()),
-                );
+                result.write_op(OpCode::POP, self.lookup_source_line(block.end()));
 
                 Ok(())
             }
             crate::parser::Stmt::Return(value) => {
-                self.compile_expr(value, context)?;
-                self.write_op(
-                    context.function_idx,
-                    OpCode::RET,
-                    self.lookup_source_line(stmt.start()),
-                );
+                self.compile_expr(value, context, result)?;
+                result.write_op(OpCode::RET, self.lookup_source_line(stmt.start()));
                 Ok(())
             }
         }
@@ -950,21 +879,20 @@ impl VirtualMachine {
         &mut self,
         expr: &AstExpression,
         context: &mut LexicalScope,
+        result: &mut ByteCode,
     ) -> Result<(), VirtualMachineError> {
         match expr.node() {
             crate::parser::Expression::Assignment { lvalue, rvalue } => {
                 if let Expression::Identier(name) = lvalue.node() {
-                    self.compile_expr(rvalue, context)?;
+                    self.compile_expr(rvalue, context, result)?;
                     if let Some(offset) = context.resolve_local(name.as_str()) {
-                        self.write_op(
-                            context.function_idx,
+                        result.write_op(
                             OpCode::SETLOCAL(offset as u16),
                             self.lookup_source_line(lvalue.start()),
                         )
                     } else {
                         let idx = self.interner.intern_str(&name);
-                        self.write_op(
-                            context.function_idx,
+                        result.write_op(
                             OpCode::SETGLOBAL(idx),
                             self.lookup_source_line(expr.start()),
                         );
@@ -973,23 +901,20 @@ impl VirtualMachine {
             }
             crate::parser::Expression::Identier(name) => {
                 if let Some(offset) = context.resolve_local(name.as_str()) {
-                    self.write_op(
-                        context.function_idx,
+                    result.write_op(
                         OpCode::GETLOCAL(offset as u16),
                         self.lookup_source_line(expr.start()),
                     )
                 } else {
                     let name_idx = self.interner.intern_str(name.as_str());
-                    self.write_op(
-                        context.function_idx,
+                    result.write_op(
                         OpCode::GETGLOBAL(name_idx),
                         self.lookup_source_line(expr.start()),
                     )
                 }
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NumberLiteral(num)) => {
-                self.write_op(
-                    context.function_idx,
+                result.write_op(
                     OpCode::CONSTANT(self.constants.len() as u16),
                     self.lookup_source_line(expr.start()),
                 );
@@ -997,8 +922,7 @@ impl VirtualMachine {
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::StringLiteral(s)) => {
                 let val = Value::String(self.interner.intern_str(s));
-                self.write_op(
-                    context.function_idx,
+                result.write_op(
                     OpCode::CONSTANT(self.constants.len() as u16),
                     self.lookup_source_line(expr.start()),
                 );
@@ -1006,158 +930,98 @@ impl VirtualMachine {
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::BoolLiteral(x)) => {
                 if *x {
-                    self.write_op(
-                        context.function_idx,
-                        OpCode::TRUE,
-                        self.lookup_source_line(expr.start()),
-                    );
+                    result.write_op(OpCode::TRUE, self.lookup_source_line(expr.start()));
                 } else {
-                    self.write_op(
-                        context.function_idx,
-                        OpCode::FALSE,
-                        self.lookup_source_line(expr.start()),
-                    );
+                    result.write_op(OpCode::FALSE, self.lookup_source_line(expr.start()));
                 }
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NilLiteral) => {
-                self.write_op(
-                    context.function_idx,
-                    OpCode::NIL,
-                    self.lookup_source_line(expr.start()),
-                );
+                result.write_op(OpCode::NIL, self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Multiply { left, right } => {
-                self.compile_expr(&left.as_ref(), context)?;
-                self.compile_expr(&right.as_ref(), context)?;
-                self.write_op(
-                    context.function_idx,
-                    OpCode::MULTIPLY,
-                    self.lookup_source_line(left.start()),
-                );
+                self.compile_expr(&left.as_ref(), context, result)?;
+                self.compile_expr(&right.as_ref(), context, result)?;
+                result.write_op(OpCode::MULTIPLY, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Divide { left: _, right: _ } => todo!(),
             crate::parser::Expression::Add { left, right } => {
-                self.compile_expr(&left.as_ref(), context)?;
-                self.compile_expr(&right.as_ref(), context)?;
-                self.write_op(
-                    context.function_idx,
-                    OpCode::ADD,
-                    self.lookup_source_line(left.start()),
-                );
+                self.compile_expr(&left.as_ref(), context, result)?;
+                self.compile_expr(&right.as_ref(), context, result)?;
+                result.write_op(OpCode::ADD, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Subtract { left, right } => {
-                self.compile_expr(&left.as_ref(), context)?;
-                self.compile_expr(&right.as_ref(), context)?;
-                self.write_op(
-                    context.function_idx,
-                    OpCode::SUBTRACT,
-                    self.lookup_source_line(left.start()),
-                );
+                self.compile_expr(&left.as_ref(), context, result)?;
+                self.compile_expr(&right.as_ref(), context, result)?;
+                result.write_op(OpCode::SUBTRACT, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::UnaryNegation { expr } => {
-                self.compile_expr(expr.as_ref(), context)?;
-                self.write_op(
-                    context.function_idx,
-                    OpCode::NEGATE,
-                    self.lookup_source_line(expr.start()),
-                );
+                self.compile_expr(expr.as_ref(), context, result)?;
+                result.write_op(OpCode::NEGATE, self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Grouping { expr } => {
-                self.compile_expr(&expr, context)?;
+                self.compile_expr(&expr, context, result)?;
             }
             crate::parser::Expression::UnaryNot { expr } => {
-                self.compile_expr(expr, context)?;
-                self.write_op(
-                    context.function_idx,
-                    OpCode::NOT,
-                    self.lookup_source_line(expr.start()),
-                );
+                self.compile_expr(expr, context, result)?;
+                result.write_op(OpCode::NOT, self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::Greater { left, right }) => {
-                self.compile_expr(&left, context)?;
-                self.compile_expr(&right, context)?;
-                self.write_op(
-                    context.function_idx,
-                    OpCode::GREATER,
-                    self.lookup_source_line(left.start()),
-                );
+                self.compile_expr(&left, context, result)?;
+                self.compile_expr(&right, context, result)?;
+                result.write_op(OpCode::GREATER, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::Less { left, right }) => {
-                self.compile_expr(&right, context)?;
-                self.compile_expr(&left, context)?;
-                self.write_op(
-                    context.function_idx,
-                    OpCode::LESS,
-                    self.lookup_source_line(left.start()),
-                );
+                self.compile_expr(&right, context, result)?;
+                self.compile_expr(&left, context, result)?;
+                result.write_op(OpCode::LESS, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::Equal { left, right }) => {
-                self.compile_expr(&left, context)?;
-                self.compile_expr(&right, context)?;
-                self.write_op(
-                    context.function_idx,
-                    OpCode::EQUAL,
-                    self.lookup_source_line(left.start()),
-                );
+                self.compile_expr(&left, context, result)?;
+                self.compile_expr(&right, context, result)?;
+                result.write_op(OpCode::EQUAL, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::NotEqual { left, right }) => {
-                self.compile_expr(&left, context)?;
-                self.compile_expr(&right, context)?;
-                self.write_op(
-                    context.function_idx,
-                    OpCode::EQUAL,
-                    self.lookup_source_line(left.start()),
-                );
-                self.write_op(
-                    context.function_idx,
-                    OpCode::NOT,
-                    self.lookup_source_line(left.start()),
-                );
+                self.compile_expr(&left, context, result)?;
+                self.compile_expr(&right, context, result)?;
+                result.write_op(OpCode::EQUAL, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::NOT, self.lookup_source_line(left.start()));
             }
 
             crate::parser::Expression::Logical(LogicalExpression::And { left, right }) => {
-                self.compile_expr(&left, context)?;
-                let pos_after_left = self.next_instruction(context.function_idx);
-                self.write_op(
-                    context.function_idx,
+                self.compile_expr(&left, context, result)?;
+                let pos_after_left = self.next_instruction(result);
+                result.write_op(
                     OpCode::JUMPIFFALSE(i16::MAX),
                     self.lookup_source_line(left.start()),
                 );
-                self.compile_expr(&right, context)?;
+                self.compile_expr(&right, context, result)?;
                 self.patch_offset(
-                    context.function_idx,
+                    result,
                     pos_after_left + 1,
-                    self.offset_since(pos_after_left, context.function_idx),
+                    self.offset_since(pos_after_left, result),
                 )
             }
             crate::parser::Expression::Logical(LogicalExpression::Or { left, right }) => {
-                self.compile_expr(&left, context)?;
+                self.compile_expr(&left, context, result)?;
 
-                self.write_op(
-                    context.function_idx,
+                result.write_op(
                     OpCode::JUMPIFFALSE(6), // JUMPIFFALSE + JUMP
                     self.lookup_source_line(left.start()),
                 );
-                let jump_out = self.next_instruction(context.function_idx);
-                self.write_op(
-                    context.function_idx,
+                let jump_out = self.next_instruction(result);
+                result.write_op(
                     OpCode::JUMP(i16::MAX),
                     self.lookup_source_line(left.start()),
                 );
-                self.compile_expr(&right, context)?;
-                self.patch_offset(
-                    context.function_idx,
-                    jump_out + 1,
-                    self.offset_since(jump_out, context.function_idx),
-                );
+                self.compile_expr(&right, context, result)?;
+                self.patch_offset(result, jump_out + 1, self.offset_since(jump_out, result));
             }
             crate::parser::Expression::Call { calee, arguments } => {
-                self.compile_expr(&calee, context)?;
+                self.compile_expr(&calee, context, result)?;
                 for arg in arguments {
-                    self.compile_expr(arg, context)?;
+                    self.compile_expr(arg, context, result)?;
                 }
-                self.write_op(
-                    context.function_idx,
+                result.write_op(
                     OpCode::CALL(arguments.len() as u8),
                     self.lookup_source_line(calee.start()),
                 )
@@ -1176,10 +1040,27 @@ impl VirtualMachine {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum UpvalueRef<'a> {
+    Local(&'a str, usize),
+    Upvalue(&'a str, usize),
+}
+
+impl<'a> UpvalueRef<'a> {
+    pub fn name(&self) -> &'a str {
+        match self {
+            UpvalueRef::Local(name, _) => name,
+            UpvalueRef::Upvalue(name, _) => name,
+        }
+    }
+}
+
 pub struct LexicalScope<'a> {
     parent: Option<Box<LexicalScope<'a>>>,
+    //closure_scope: Option<Box<LexicalScope<'a>>>,
     args: Vec<&'a str>,
     locals: Vec<(&'a str, usize)>,
+    upvalues: Vec<UpvalueRef<'a>>,
     block_depth: usize,
     function_idx: usize,
 }
@@ -1196,10 +1077,11 @@ impl<'a> LexicalScope<'a> {
             locals: Default::default(),
             block_depth: 0,
             function_idx: 0,
+            upvalues: Default::default(),
         }
     }
 
-    pub fn function(
+    pub fn function_decl(
         &mut self,
         name: &'a str,
         function_idx: usize,
@@ -1213,10 +1095,13 @@ impl<'a> LexicalScope<'a> {
                 a.extend(args);
                 a
             },
-            block_depth: 0,
+            block_depth: self.block_depth,
             function_idx: function_idx,
             locals: Default::default(),
+            upvalues: Vec::with_capacity(self.locals.len() + self.upvalues.len()),
         };
+
+        //for (i, local) in self.new_local(name)
 
         let prev = mem::replace(self, new);
         self.parent = Some(Box::new(prev));
@@ -1230,6 +1115,7 @@ impl<'a> LexicalScope<'a> {
             function_idx,
             locals,
             parent,
+            upvalues,
         } = *parent;
 
         self.args = args;
@@ -1237,6 +1123,7 @@ impl<'a> LexicalScope<'a> {
         self.function_idx = function_idx;
         self.locals = locals;
         self.parent = parent;
+        self.upvalues = upvalues;
     }
 
     fn enter_block(&mut self) {
@@ -1277,6 +1164,30 @@ impl<'a> LexicalScope<'a> {
         }
         None
     }
+
+    fn resolve_upvalue(&mut self, name: &'a str) -> Option<UpvalueRef<'a>> {
+        if self.is_toplevel() {
+            return None;
+        }
+
+        if let Some(x) = self.upvalues.iter().find(|x| x.name() == name) {
+            return Some(x.to_owned());
+        }
+
+        if let Some(local_idx) = self.parent.as_ref().and_then(|x| x.resolve_local(name)) {
+            let value = UpvalueRef::Local(name, local_idx);
+            self.upvalues.push(value.clone());
+            return Some(value);
+        }
+
+        if let Some(_) = self.parent.as_mut().and_then(|x| x.resolve_upvalue(name)) {
+            let value = UpvalueRef::Upvalue(name, self.upvalues.len());
+            self.upvalues.push(value.clone());
+            return Some(value);
+        }
+
+        return None;
+    }
 }
 
 pub struct DispayValue<'a> {
@@ -1307,7 +1218,6 @@ impl<'a> Display for DispayValue<'a> {
 
 #[cfg(test)]
 mod tests {
-
     use pretty_assertions::assert_eq;
 
     use crate::vm::LexicalScope;
@@ -1321,7 +1231,7 @@ mod tests {
         assert_eq!(scope.new_local("x"), 2);
         assert_eq!(Some(2), scope.resolve_local("x"));
 
-        scope.function("some_fun", 1, ["a", "b"]);
+        scope.function_decl("some_fun", 1, ["a", "b"]);
         assert_eq!(scope.new_local("x"), 3);
         assert_eq!(Some(0), scope.resolve_local("some_fun"));
         assert_eq!(Some(3), scope.resolve_local("x"));
@@ -1331,4 +1241,39 @@ mod tests {
         scope.leave_block();
         assert_eq!(Some(0), scope.resolve_local("x"));
     }
+
+    #[test]
+    fn test_with_upvalues() {
+        let mut scope = LexicalScope::root();
+        scope.enter_block();
+        scope.new_local("a");
+        scope.new_local("b");
+
+        scope.function_decl("outer", 1, ["p1", "p2"]);
+
+        assert_eq!(None, scope.resolve_local("a"));
+        assert_eq!(
+            Some(crate::vm::UpvalueRef::Local("a", 0)),
+            scope.resolve_upvalue("a")
+        );
+
+        scope.function_decl("inner", 2, ["inner_param1"]);
+        assert_eq!(
+            Some(crate::vm::UpvalueRef::Upvalue("a", 0)),
+            scope.resolve_upvalue("a")
+        );
+        assert_eq!(
+            Some(crate::vm::UpvalueRef::Upvalue("a", 0)),
+            scope.resolve_upvalue("a")
+        );
+    }
+    // "a" ->
+
+    /*
+    OP_CLOSURE -> creates function and it's upvalues
+
+    up
+
+
+     */
 }
