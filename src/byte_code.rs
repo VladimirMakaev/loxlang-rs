@@ -1,4 +1,4 @@
-use std::{iter::repeat, mem::size_of};
+use std::{collections::btree_map::Range, iter::repeat, mem::size_of, ops::Index, process::Output};
 
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -51,6 +51,10 @@ impl ByteCode {
         LittleEndian::read_i16(&self.code[ip..])
     }
 
+    pub fn read_u8(&self, ip: usize) -> u8 {
+        self.code[ip]
+    }
+
     pub fn read_next(self: &ByteCode, ip: usize) -> Option<Result<(OpCode, usize), OpCodeError>> {
         if self.code.len() <= ip {
             return None;
@@ -72,6 +76,10 @@ impl ByteCode {
                 3
             }
             Some(OpCode::GETLOCAL(idx)) | Some(OpCode::SETLOCAL(idx)) => {
+                *idx = self.read_u16(ip);
+                3
+            }
+            Some(OpCode::GETUPVALUE(idx)) | Some(OpCode::SETUPVALUE(idx)) => {
                 *idx = self.read_u16(ip);
                 3
             }
@@ -121,6 +129,8 @@ impl ByteCode {
                 write_one_u16(&mut self.code, idx.as_u16())
             }
             OpCode::SETLOCAL(idx) | OpCode::GETLOCAL(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::GETUPVALUE(idx) | OpCode::SETUPVALUE(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::CLOSURE(idx) => write_one_u16(&mut self.code, idx),
             OpCode::JUMPIFFALSE(offset) | OpCode::JUMP(offset) | OpCode::LOOP(offset) => {
                 write_one_i16(&mut self.code, offset)
             }
@@ -184,6 +194,9 @@ pub enum OpCode {
     SETGLOBAL(StrId),
     SETLOCAL(u16),
     GETLOCAL(u16),
+    GETUPVALUE(u16),
+    SETUPVALUE(u16),
+    CLOSURE(u16),
     DECLAREGLOBAL(StrId),
     JUMP(i16),
     JUMPIFFALSE(i16),

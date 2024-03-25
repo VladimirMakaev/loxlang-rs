@@ -21,6 +21,9 @@ impl From<ParseError> for StmtError {
 
 #[derive(Error, Debug)]
 pub enum ParseError {
+    #[error("Already a variable with this name in this scope.")]
+    VariableAlreadyDeclared { span: Span },
+
     #[error("{expectation}")]
     UnexpectedToken { span: Span, expectation: String },
 
@@ -66,7 +69,7 @@ pub trait Ast: Sized {
 
 impl<T: Sized> Ast for T {}
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Span {
     start: PosIdx,
     end: PosIdx,

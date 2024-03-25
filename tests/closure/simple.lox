@@ -1,0 +1,11 @@
+{
+    var a = 1;
+
+    fun f1(x){
+        var x = 2;
+        print a + x;
+    }
+
+    print f1(1); //expect: 2
+}
+

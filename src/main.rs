@@ -63,6 +63,9 @@ impl App {
             VirtualMachineError::CompileError(parsing_errors) => {
                 for error in parsing_errors.iter() {
                     match error {
+                        parser::ParseError::VariableAlreadyDeclared { span } => {
+                            Self::report_error_with_span(code, codemap, err_out, span, error)?
+                        }
                         parser::ParseError::UnexpectedToken { span, .. } => {
                             Self::report_error_with_span(code, codemap, err_out, span, error)?
                         }
