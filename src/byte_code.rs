@@ -116,6 +116,11 @@ impl ByteCode {
         self.lines.push(line);
     }
 
+    pub fn write_u16(&mut self, byte: u16, line: usize) {
+        self.code.extend(byte.to_le_bytes());
+        self.lines.extend([line, line]);
+    }
+
     pub fn write_op(&mut self, op: OpCode, line: usize) {
         fn write_one_u16(code: &mut Vec<u8>, param: u16) -> usize {
             let bytes = param.to_le_bytes();
@@ -151,50 +156,6 @@ impl ByteCode {
             _ => 0,
         };
         self.lines.extend(repeat(line).take(bytes_count + 1));
-    }
-
-    pub fn decompile<'a>(
-        &'a self,
-        ip: usize,
-    ) -> impl Iterator<Item = Result<OpCode, OpCodeError>> + 'a + std::fmt::Display {
-        ByteCodeSlice {
-            byte_code: self,
-            start: ip,
-        }
-    }
-}
-
-struct ByteCodeSlice<'a> {
-    byte_code: &'a ByteCode,
-    start: usize,
-}
-
-impl<'a> std::fmt::Display for ByteCodeSlice<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut ip = self.start;
-        while let Some(Ok((op, size))) = self.byte_code.read_next(ip) {
-            writeln!(f, "@{} {:?}", ip, op)?;
-            ip = ip + size;
-        }
-        Ok(())
-    }
-}
-
-impl<'a> Iterator for ByteCodeSlice<'a> {
-    type Item = Result<OpCode, OpCodeError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.byte_code.read_next(self.start) {
-            // Some(Ok((OpCode::CLOSURE(fun_idx), size))) => {
-            //     self.start += size;
-            // }
-            Some(Ok((op, size))) => {
-                self.start += size;
-                Some(Ok(op))
-            }
-            Some(Err(err)) => Some(Err(err)),
-            None => None,
-        }
     }
 }
 

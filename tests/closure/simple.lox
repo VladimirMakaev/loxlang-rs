@@ -1,5 +1,5 @@
+var a = 1;
 {
-    var a = 1;
     var b = 2;
 
     fun f1(x){
@@ -8,7 +8,5 @@
         }
         return a + x + b + inner(5);
     }
-
     print f1(1); //expect: 11
 }
-

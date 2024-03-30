@@ -21,6 +21,10 @@ impl Value {
             ty: ObjectType::Function,
         });
     }
+
+    pub fn closure(closure_id: usize) -> Value {
+        return Value::Closure(ClosureValue { closure_id });
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -36,7 +40,7 @@ pub struct FunctionValue {
 
 #[derive(Clone, Copy)]
 pub struct ClosureValue {
-    closure_id: usize,
+    pub closure_id: usize,
 }
 
 #[derive(Clone, Copy)]

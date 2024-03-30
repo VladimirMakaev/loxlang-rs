@@ -20,7 +20,7 @@ use crate::{
         AstExpression, AstStmt, Expression, ForStmt, IfStmt, LogicalExpression, ParseError, Parser,
         StmtDeclaration, WhileStmt,
     },
-    value::{ObjectType, ObjectValue, Value, ValueTypes},
+    value::{ClosureValue, ObjectType, ObjectValue, Value, ValueTypes},
 };
 
 #[derive(Error, Debug)]
@@ -31,6 +31,8 @@ pub enum RuntimeErrorKind {
     InvalidCallee,
     #[error("Expected {expected} arguments but got {got}.")]
     InvalidFunArity { got: usize, expected: usize },
+    #[error("Unexpected runtime {error}")]
+    Unexpected { error: anyhow::Error },
 }
 
 #[derive(Error, Debug)]
@@ -67,8 +69,88 @@ struct Function {
     upvalue_count: usize,
 }
 
+struct OpCodeSlice<'a> {
+    fun: &'a Function,
+    vm: &'a VirtualMachine,
+    start: usize,
+}
+
+impl<'a> std::fmt::Display for OpCodeSlice<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut ip = self.start;
+        while let Some(Ok((op, size))) = self.fun.code.read_next(ip) {
+            match op {
+                OpCode::DECLAREGLOBAL(idx) => {
+                    writeln!(
+                        f,
+                        "@{ip} DECLAREGLOBAL(\"{value}\")",
+                        value = self.vm.interner.get_str(idx.into()),
+                    )?;
+                    ip = ip + size;
+                }
+                OpCode::GETGLOBAL(idx) => {
+                    writeln!(
+                        f,
+                        "@{ip} GETGLOBAL(\"{value}\")",
+                        value = self.vm.interner.get_str(idx.into()),
+                    )?;
+                    ip = ip + size;
+                }
+                OpCode::SETGLOBAL(idx) => {
+                    writeln!(
+                        f,
+                        "@{ip} SETGLOBAL(\"{value}\")",
+                        value = self.vm.interner.get_str(idx.into()),
+                    )?;
+                    ip = ip + size;
+                }
+                OpCode::CONSTANT(idx) => {
+                    writeln!(
+                        f,
+                        "@{ip} CONSTANT({value})",
+                        value = self.vm.as_display(self.vm.constants[idx as usize].clone())
+                    )?;
+                    ip = ip + size;
+                }
+                OpCode::CLOSURE(fun_idx) => {
+                    let at = ip;
+                    ip = ip + size;
+                    let name = self
+                        .vm
+                        .interner
+                        .get_str(self.vm.functions[fun_idx as usize].name);
+                    let upvalues = (0..self.vm.functions[fun_idx as usize].upvalue_count)
+                        .map(|i| {
+                            format!(
+                                "{is_log}:{idx}",
+                                is_log = if self.fun.code.read_u8(ip + 3 * i) == 1 {
+                                    "loc"
+                                } else {
+                                    "up"
+                                },
+                                idx = self.fun.code.read_u16(ip + 3 * i + 1)
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    writeln!(
+                        f,
+                        "@{at} CLOSURE({name},{params})",
+                        params = upvalues.join(",")
+                    )?;
+                    ip = ip + &self.vm.functions[fun_idx as usize].upvalue_count * 3;
+                }
+                _ => {
+                    writeln!(f, "@{} {:?}", ip, op)?;
+                    ip = ip + size;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 struct Closure {
-    _function_idx: usize,
+    function_idx: usize,
     upvalues: Vec<Upvalue>,
 }
 
@@ -142,12 +224,20 @@ impl VirtualMachine {
                 stdout,
                 "{}:\n{}",
                 self.interner.get_str(*name_idx),
-                self.functions[*function_idx].code.decompile(0)
+                self.opcodes(*function_idx, 0)
             )
             .map_err(|e| VirtualMachineError::Unhandled(e.into()))?
         }
 
         Ok(())
+    }
+
+    fn opcodes(&self, function_idx: usize, start: usize) -> OpCodeSlice {
+        OpCodeSlice {
+            fun: &self.functions[function_idx],
+            start: start,
+            vm: self,
+        }
     }
 
     pub fn compile(&mut self, code: &str) -> Result<(), VirtualMachineError> {
@@ -385,11 +475,16 @@ impl VirtualMachine {
                             self.push(Value::String(result));
                         }
                         (left, right) => {
-                            return Err(VirtualMachineError::Unhandled(anyhow!(
-                                "ADD: unsupported types of operands: left: {}, right: {}",
-                                self.as_display(left),
-                                self.as_display(right)
-                            )))
+                            return Err(VirtualMachineError::RuntimeError {
+                                kind: RuntimeErrorKind::Unexpected {
+                                    error: anyhow!(
+                                        "ADD: unsupported types of operands: left: {}, right: {}",
+                                        self.as_display(left),
+                                        self.as_display(right)
+                                    ),
+                                },
+                                stacktrace: self.stacktrace(),
+                            })
                         }
                     }
                 }
@@ -607,11 +702,11 @@ impl VirtualMachine {
                 }
                 OpCode::CALL(arg_count) => {
                     let arg_count = arg_count as usize;
-                    let function = &self.stack[self.stack.len() - arg_count - 1];
+                    let closure = &self.stack[self.stack.len() - arg_count - 1];
                     debug!(
                         "@{} CALL {}({}) [line: {}]",
                         self.ip(),
-                        self.as_display(function.clone()),
+                        self.as_display(closure.clone()),
                         (0..arg_count)
                             .into_iter()
                             .map(|i| {
@@ -627,12 +722,9 @@ impl VirtualMachine {
                     //debug!("Last 5 values on stack:\n{}", self.show_stack(5));
                     //debug!("frames:\n{:#?}", &self.frames);
 
-                    if let Value::Object(ObjectValue {
-                        ty: ObjectType::Function,
-                        object_id: function_idx,
-                    }) = function
-                    {
-                        let fun = &self.functions[*function_idx];
+                    if let Value::Closure(ClosureValue { closure_id }) = closure {
+                        let closure = &self.closures[*closure_id];
+                        let fun = &self.functions[closure.function_idx];
                         if fun.arity != arg_count {
                             return Err(VirtualMachineError::RuntimeError {
                                 kind: RuntimeErrorKind::InvalidFunArity {
@@ -645,8 +737,8 @@ impl VirtualMachine {
                         //self.frames[self.frame_idx].inc_ip(size);
                         self.frames.push(CallFrame {
                             ip: 0,
-                            closure_idx: 0,
-                            function_idx: *function_idx,
+                            closure_idx: *closure_id,
+                            function_idx: closure.function_idx,
                             locals_idx: self.stack.len() - arg_count - 1,
                         });
                         self.frame_idx += 1;
@@ -690,11 +782,12 @@ impl VirtualMachine {
                     }
                 }
                 OpCode::SETUPVALUE(idx) => todo!(),
-                OpCode::CLOSURE(idx) => {
+                OpCode::CLOSURE(function_idx) => {
                     self.frames[self.frame_idx].inc_ip(size);
-                    let upvalues = self.read_upvalues(idx as usize)?;
+                    let upvalues = self.read_upvalues(function_idx as usize)?;
+                    self.push(Value::closure(self.closures.len()));
                     self.closures.push(Closure {
-                        _function_idx: idx as usize,
+                        function_idx: function_idx as usize,
                         upvalues,
                     });
                     continue;
@@ -752,35 +845,21 @@ impl VirtualMachine {
                 function.upvalue_count = context.upvalues.len();
 
                 result.write_op(
-                    OpCode::CONSTANT(self.constants.len() as u16),
-                    self.lookup_source_line(name.start()),
-                );
-                self.constants.push(Value::fun(self.functions.len()));
-                result.write_op(
                     OpCode::CLOSURE(self.functions.len() as u16),
                     self.lookup_source_line(name.start()),
                 );
                 for (_, i) in &context.upvalues {
-                    match i {
-                        UpvalueRef::Local(idx) | UpvalueRef::Upvalue(idx) => {
-                            eprintln!("@{} = 1", result.size());
-                            result.write_byte(1, self.lookup_source_line(name.start()));
-                            let b = idx.to_le_bytes();
-                            eprintln!("@{} = {}", result.size(), b[0]);
-                            result.write_byte(b[0], self.lookup_source_line(name.start()));
-                            eprintln!("@{} = {}", result.size(), b[1]);
-                            result.write_byte(b[1], self.lookup_source_line(name.start()));
-                        }
-                    }
+                    i.write_to(result, self.lookup_source_line(name.start()));
                 }
-                context.leave_function();
 
-                let name_idx = self.interner.intern_str(&name.node());
-                self.function_by_name.insert(name_idx, self.functions.len());
+                self.function_by_name.insert(
+                    self.interner.intern_str(context.name()),
+                    self.functions.len(),
+                );
                 self.functions.push(function);
+                context.leave_function();
+                let name_idx = self.interner.intern_str(&name.node());
                 if context.is_toplevel() {
-                    self.globals
-                        .insert(name_idx, Value::fun(self.functions.len()));
                     result.write_op(
                         OpCode::DECLAREGLOBAL(name_idx),
                         self.lookup_source_line(name.start()),
@@ -974,7 +1053,7 @@ impl VirtualMachine {
                         )
                     } else {
                         match context.resolve_upvalue(name.as_str()) {
-                            Some(UpvalueRef::Local(idx)) | Some(UpvalueRef::Upvalue(idx)) => {
+                            Some((idx, _)) => {
                                 result.write_op(
                                     OpCode::SETUPVALUE(idx as u16),
                                     self.lookup_source_line(expr.start()),
@@ -999,7 +1078,7 @@ impl VirtualMachine {
                     )
                 } else {
                     match context.resolve_upvalue(name.as_str()) {
-                        Some(UpvalueRef::Local(idx) | UpvalueRef::Upvalue(idx)) => {
+                        Some((idx, _)) => {
                             result.write_op(
                                 OpCode::GETUPVALUE(idx as u16),
                                 self.lookup_source_line(expr.start()),
@@ -1148,16 +1227,35 @@ pub enum UpvalueRef {
     Upvalue(usize),
 }
 
+impl UpvalueRef {
+    pub fn write_to(&self, code: &mut ByteCode, line: usize) {
+        match self {
+            UpvalueRef::Local(x) => {
+                code.write_byte(1, line);
+                code.write_u16(*x as u16, line);
+            }
+            UpvalueRef::Upvalue(x) => {
+                code.write_byte(2, line);
+                code.write_u16(*x as u16, line);
+            }
+        }
+    }
+}
+
 pub struct LexicalScope<'a> {
     parent: Option<Box<LexicalScope<'a>>>,
-    //closure_scope: Option<Box<LexicalScope<'a>>>,
     args: Vec<&'a str>,
     locals: Vec<(&'a str, usize)>,
     upvalues: Vec<(&'a str, UpvalueRef)>,
     block_depth: usize,
+    name: Option<String>,
 }
 
 impl<'a> LexicalScope<'a> {
+    pub fn name(&self) -> &str {
+        self.name.as_deref().unwrap_or("<script>")
+    }
+
     pub fn is_toplevel(&self) -> bool {
         self.block_depth == 0
     }
@@ -1169,6 +1267,7 @@ impl<'a> LexicalScope<'a> {
             locals: Default::default(),
             block_depth: 0,
             upvalues: Default::default(),
+            name: None,
         }
     }
 
@@ -1184,6 +1283,11 @@ impl<'a> LexicalScope<'a> {
             block_depth: self.block_depth,
             locals: Default::default(),
             upvalues: Vec::with_capacity(self.locals.len() + self.upvalues.len()),
+            name: self
+                .name
+                .as_ref()
+                .map(|p_name| Some(format!("{}/{}", p_name, name)))
+                .unwrap_or_else(|| Some(name.to_owned())),
         };
 
         //for (i, local) in self.new_local(name)
@@ -1200,6 +1304,7 @@ impl<'a> LexicalScope<'a> {
             locals,
             parent,
             upvalues,
+            name,
         } = *parent;
 
         self.args = args;
@@ -1207,6 +1312,7 @@ impl<'a> LexicalScope<'a> {
         self.locals = locals;
         self.parent = parent;
         self.upvalues = upvalues;
+        self.name = name;
     }
 
     pub fn enter_block(&mut self) {
@@ -1268,25 +1374,30 @@ impl<'a> LexicalScope<'a> {
         None
     }
 
-    pub fn resolve_upvalue(&mut self, name: &'a str) -> Option<UpvalueRef> {
+    pub fn resolve_upvalue(&mut self, name: &'a str) -> Option<(usize, UpvalueRef)> {
         if self.is_toplevel() {
             return None;
         }
 
-        if let Some((_, value)) = self.upvalues.iter().find(|(n, _)| n == &name) {
-            return Some(value.to_owned());
+        if let Some((i, (_, value))) = self
+            .upvalues
+            .iter()
+            .enumerate()
+            .find(|(_, (n, _))| n == &name)
+        {
+            return Some((i, value.to_owned()));
         }
 
         if let Some(local_idx) = self.parent.as_ref().and_then(|x| x.resolve_local(name)) {
             let value = UpvalueRef::Local(local_idx);
             self.upvalues.push((name, value.clone()));
-            return Some(value);
+            return Some((self.upvalues.len() - 1, value));
         }
 
-        if let Some(_) = self.parent.as_mut().and_then(|x| x.resolve_upvalue(name)) {
-            let value = UpvalueRef::Upvalue(self.upvalues.len());
+        if let Some((i, _)) = self.parent.as_mut().and_then(|x| x.resolve_upvalue(name)) {
+            let value = UpvalueRef::Upvalue(i);
             self.upvalues.push((name, value.clone()));
-            return Some(value);
+            return Some((self.upvalues.len() - 1, value));
         }
 
         return None;
@@ -1358,6 +1469,27 @@ mod tests {
     }
 
     #[test]
+    fn test_upvalues_nesting() {
+        let mut scope = LexicalScope::root();
+        scope.enter_block();
+        scope.new_local("b");
+        scope.function_decl("f1", ["x"]);
+        assert_eq!(
+            scope.resolve_upvalue("b"),
+            Some((0, crate::vm::UpvalueRef::Local(0)))
+        );
+        scope.function_decl("inner", ["y"]);
+        assert_eq!(
+            scope.resolve_upvalue("x"),
+            Some((0, crate::vm::UpvalueRef::Local(1)))
+        );
+        assert_eq!(
+            scope.resolve_upvalue("b"),
+            Some((1, crate::vm::UpvalueRef::Upvalue(0)))
+        );
+    }
+
+    #[test]
     fn test_with_upvalues() {
         let mut scope = LexicalScope::root();
         scope.enter_block();
@@ -1368,21 +1500,21 @@ mod tests {
 
         assert_eq!(None, scope.resolve_local("a"));
         assert_eq!(
-            Some(crate::vm::UpvalueRef::Local(0)),
+            Some((0, crate::vm::UpvalueRef::Local(0))),
             scope.resolve_upvalue("a")
         );
         assert_eq!(
-            Some(crate::vm::UpvalueRef::Local(1)),
+            Some((1, crate::vm::UpvalueRef::Local(1))),
             scope.resolve_upvalue("b")
         );
 
         scope.function_decl("inner", ["inner_param1"]);
         assert_eq!(
-            Some(crate::vm::UpvalueRef::Upvalue(0)),
+            Some((0, crate::vm::UpvalueRef::Upvalue(0))),
             scope.resolve_upvalue("a")
         );
         assert_eq!(
-            Some(crate::vm::UpvalueRef::Upvalue(0)),
+            Some((0, crate::vm::UpvalueRef::Upvalue(0))),
             scope.resolve_upvalue("a")
         );
 
