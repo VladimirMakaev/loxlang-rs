@@ -1,0 +1,15 @@
+fun yell(x){
+    print x;
+}
+
+
+fun catMaker(name){
+    fun make(){
+        yell(name + " mew");
+    }
+    return make;
+}
+var c1 = catMaker("foo");
+var c2 = catMaker("bar");
+c1(); //expect: "foo mew"
+c2(); //expect: "bar mew"

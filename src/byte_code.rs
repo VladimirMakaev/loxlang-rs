@@ -1,4 +1,7 @@
-use std::{collections::btree_map::Range, iter::repeat, mem::size_of, ops::Index, process::Output};
+use std::{
+    collections::btree_map::Range, io::Write, iter::repeat, mem::size_of, ops::Index,
+    process::Output,
+};
 
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -79,7 +82,9 @@ impl ByteCode {
                 *idx = self.read_u16(ip);
                 3
             }
-            Some(OpCode::GETUPVALUE(idx)) | Some(OpCode::SETUPVALUE(idx)) => {
+            Some(OpCode::GETUPVALUE(idx))
+            | Some(OpCode::SETUPVALUE(idx))
+            | Some(OpCode::CLOSURE(idx)) => {
                 *idx = self.read_u16(ip);
                 3
             }
@@ -104,6 +109,11 @@ impl ByteCode {
 
     pub fn patch_offset(&mut self, pos: usize, offset: JumpOffset) {
         self.patch_bytes(pos, offset.0.to_le_bytes());
+    }
+
+    pub fn write_byte(&mut self, byte: u8, line: usize) {
+        self.code.push(byte);
+        self.lines.push(line);
     }
 
     pub fn write_op(&mut self, op: OpCode, line: usize) {
@@ -175,6 +185,9 @@ impl<'a> Iterator for ByteCodeSlice<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.byte_code.read_next(self.start) {
+            // Some(Ok((OpCode::CLOSURE(fun_idx), size))) => {
+            //     self.start += size;
+            // }
             Some(Ok((op, size))) => {
                 self.start += size;
                 Some(Ok(op))

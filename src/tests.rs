@@ -74,6 +74,13 @@ pub fn test_fun(code: &str) -> anyhow::Result<()> {
     verify_code(code)
 }
 
+const CLOSURE_SIMPLE: &str = include_str!("../tests/closure/simple.lox");
+
+#[test_case(CLOSURE_SIMPLE)]
+pub fn test_closure(code: &str) -> anyhow::Result<()> {
+    verify_code(code)
+}
+
 fn verify_code(code: &str) -> anyhow::Result<()> {
     let mut vm = VirtualMachine::new();
     vm.compile(code)?;
