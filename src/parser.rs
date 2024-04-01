@@ -189,7 +189,7 @@ pub enum Expression {
     },
 }
 
-#[derive(Debug, strum::Display)]
+#[derive(Debug, strum::Display, strum::EnumTryAs)]
 pub enum Stmt {
     Print(AstExpression),
     Declarations(StmtDeclaration),
@@ -231,11 +231,14 @@ pub enum StmtDeclaration {
         ident: AstIdent,
         expr: Option<AstExpression>,
     },
-    Function {
-        name: AstIdent,
-        params: Vec<AstIdent>,
-        body: Box<AstStmt>,
-    },
+    Function(FunDeclaration),
+}
+
+#[derive(Debug)]
+pub struct FunDeclaration {
+    pub(crate) name: AstIdent,
+    pub(crate) params: Vec<AstIdent>,
+    pub(crate) body: Box<AstStmt>,
 }
 
 pub struct Parser<'source> {
@@ -418,12 +421,14 @@ impl<'source> Parser<'source> {
 
         let span = Span::new(fun_token.start(), block.end());
 
-        Ok(Stmt::Declarations(StmtDeclaration::Function {
-            name,
-            params: params,
-            body: Box::new(block),
-        })
-        .ast(span))
+        Ok(
+            Stmt::Declarations(StmtDeclaration::Function(FunDeclaration {
+                name,
+                params: params,
+                body: Box::new(block),
+            }))
+            .ast(span),
+        )
     }
 
     fn var_declaration(&mut self) -> StmtResult {

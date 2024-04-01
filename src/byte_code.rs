@@ -1,7 +1,4 @@
-use std::{
-    collections::btree_map::Range, io::Write, iter::repeat, mem::size_of, ops::Index,
-    process::Output,
-};
+use std::{iter::repeat, mem::size_of};
 
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -171,6 +168,7 @@ pub enum OpCode {
     GETUPVALUE(u16),
     SETUPVALUE(u16),
     CLOSURE(u16),
+    CLOSEUPVALUE,
     DECLAREGLOBAL(StrId),
     JUMP(i16),
     JUMPIFFALSE(i16),

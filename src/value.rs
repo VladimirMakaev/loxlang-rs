@@ -1,6 +1,6 @@
-use crate::{byte_code::ByteCode, interner::StrId};
+use crate::interner::StrId;
 
-#[derive(Clone, strum::EnumDiscriminants)]
+#[derive(Clone, strum::EnumDiscriminants, strum::EnumTryAs)]
 #[strum_discriminants(name(ValueTypes))]
 #[strum_discriminants(derive(strum::Display))]
 #[repr(u8)]
@@ -9,62 +9,24 @@ pub enum Value {
     Bool(bool),
     Nil,
     String(StrId),
-    Object(ObjectValue),
-    Function(FunctionValue),
     Closure(ClosureValue),
 }
 
 impl Value {
-    pub fn fun(fun_idx: usize) -> Value {
-        return Value::Object(ObjectValue {
-            object_id: fun_idx,
-            ty: ObjectType::Function,
-        });
-    }
-
     pub fn closure(closure_id: usize) -> Value {
         return Value::Closure(ClosureValue { closure_id });
     }
 }
 
-#[derive(Clone, Copy)]
-pub enum ObjectType {
-    Function,
-    _Class,
-}
-
-#[derive(Clone)]
-pub struct FunctionValue {
-    function_id: usize,
-}
-
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ClosureValue {
     pub closure_id: usize,
 }
 
-#[derive(Clone, Copy)]
-pub struct ObjectValue {
-    pub ty: ObjectType,
-    pub object_id: usize,
-}
-
-impl Value {
-    pub fn as_number(&self) -> Option<f64> {
-        if let Value::Number(x) = self {
-            Some(*x)
-        } else {
-            None
-        }
-    }
-
-    pub fn as_object(&self) -> Option<ObjectValue> {
-        if let Value::Object(x) = self {
-            Some(*x)
-        } else {
-            None
-        }
-    }
+#[derive(Debug)]
+pub enum UpValueImpl {
+    Open(usize),
+    Closed(usize),
 }
 
 impl From<f64> for Value {

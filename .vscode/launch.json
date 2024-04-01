@@ -8,18 +8,13 @@
             "type": "lldb",
             "request": "launch",
             "name": "Debug executable 'loxlang-rs'",
-            "cargo": {
-                "args": [
-                    "build",
-                ],
-                "filter": {
-                    "name": "loxlang-rs",
-                    "kind": "bin"
-                }
+            "env": {
+                "RUST_LOG": "debug"
             },
+            "program": "${workspaceFolder}/target/debug/loxlang-rs",
             "args": [
-                "--decompile",
-                "tests/fun/fun_with_locals.lox"
+                //"--decompile",
+                "tests/closure/closed_upvalues.lox"
             ],
             "cwd": "${workspaceFolder}"
         },

@@ -1,0 +1,15 @@
+var f;
+
+{
+    var a = 1;
+    var b = 2;
+    fun add(x){
+        fun p(){
+            print x + a + b;
+        }
+        return p;
+    }
+    f = add(10); // 3 locals.
+}
+
+f();

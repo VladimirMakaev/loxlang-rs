@@ -1,12 +1,14 @@
 use std::{
-    collections::hash_map::DefaultHasher,
+    cell::RefCell,
+    collections::{hash_map::DefaultHasher, BTreeMap},
     fmt::{Display, Formatter},
     hash::BuildHasherDefault,
     io::Write,
     mem,
+    ops::Deref,
+    rc::Rc,
 };
 
-use anyhow::anyhow;
 use hashbrown::HashMap;
 
 use thiserror::Error;
@@ -17,10 +19,10 @@ use crate::{
     codemap::Codemap,
     interner::{DefaultInterner, Interner, StrId},
     parser::{
-        AstExpression, AstStmt, Expression, ForStmt, IfStmt, LogicalExpression, ParseError, Parser,
-        StmtDeclaration, WhileStmt,
+        AstExpression, AstIdent, AstStmt, Expression, ForStmt, FunDeclaration, IfStmt,
+        LogicalExpression, ParseError, Parser, Span, StmtDeclaration, WhileStmt,
     },
-    value::{ClosureValue, ObjectType, ObjectValue, Value, ValueTypes},
+    value::{ClosureValue, UpValueImpl, Value, ValueTypes},
 };
 
 #[derive(Error, Debug)]
@@ -149,16 +151,36 @@ impl<'a> std::fmt::Display for OpCodeSlice<'a> {
     }
 }
 
-struct Closure {
-    function_idx: usize,
-    upvalues: Vec<Upvalue>,
+#[derive(Clone, Debug)]
+struct UpValuePtr(Rc<RefCell<UpValueImpl>>);
+
+impl UpValuePtr {
+    pub fn get_value(&self, vm: &VirtualMachine) -> Result<Value, VirtualMachineError> {
+        let value = self.0.borrow();
+        match value.deref() {
+            UpValueImpl::Open(stack_slot) => Ok(vm.stack[*stack_slot].clone()),
+            UpValueImpl::Closed(closed_idx) => Ok(vm.closed_upvalues[*closed_idx].clone()),
+        }
+    }
+
+    pub fn close(&self, vm: &mut VirtualMachine, stack_value: Value) {
+        let value = self.0.deref();
+        if matches!(value.borrow().deref(), UpValueImpl::Open(_)) {
+            value.replace(UpValueImpl::Closed(vm.closed_upvalues.len()));
+            vm.closed_upvalues.push(stack_value);
+        }
+    }
 }
 
-#[repr(u8)]
-#[derive(strum::FromRepr)]
-enum Upvalue {
-    Local(u16, Option<usize>) = 1,
-    Parent(u16, Option<usize>),
+impl From<UpValueImpl> for UpValuePtr {
+    fn from(value: UpValueImpl) -> Self {
+        Self(Rc::new(RefCell::new(value)))
+    }
+}
+
+struct Closure {
+    function_idx: usize,
+    upvalues: Vec<UpValuePtr>,
 }
 
 #[derive(Debug)]
@@ -183,18 +205,37 @@ impl CallFrame {
     }
 }
 
+#[derive(Default)]
+struct OpenUpValues {
+    slots_to_values: BTreeMap<usize, UpValuePtr>,
+}
+
+impl OpenUpValues {
+    pub fn take(&mut self, stack_slot: usize) -> Option<UpValuePtr> {
+        self.slots_to_values.remove(&stack_slot)
+    }
+
+    pub fn capture_upvalue(&mut self, stack_slot: usize) -> UpValuePtr {
+        self.slots_to_values
+            .entry(stack_slot)
+            .or_insert(UpValueImpl::Open(stack_slot).into())
+            .clone()
+    }
+}
+
 pub struct VirtualMachine {
-    frame_idx: usize,
+    pub(crate) frame_idx: usize,
     frames: Vec<CallFrame>,
-    interner: DefaultInterner,
-    stack: Vec<Value>,
-    constants: Vec<Value>,
+    pub(crate) interner: DefaultInterner,
+    pub(crate) stack: Vec<Value>,
+    pub(crate) constants: Vec<Value>,
     closures: Vec<Closure>,
     functions: Vec<Function>,
-    function_by_name: HashMap<StrId, usize>,
-    globals: HashMap<StrId, Value>,
-    codemap: Codemap,
-    _closed_upvalues: Vec<Value>,
+    pub(crate) function_by_name: HashMap<StrId, usize>,
+    pub(crate) globals: HashMap<StrId, Value>,
+    pub(crate) codemap: Codemap,
+    pub(crate) closed_upvalues: Vec<Value>,
+    open_upvalues: OpenUpValues,
 }
 
 impl VirtualMachine {
@@ -214,7 +255,8 @@ impl VirtualMachine {
                 position_starts_at_1: false,
             },
             closures: Default::default(),
-            _closed_upvalues: Default::default(),
+            closed_upvalues: Default::default(),
+            open_upvalues: Default::default(),
         }
     }
 
@@ -250,11 +292,28 @@ impl VirtualMachine {
 
         let mut result = ByteCode::default();
         let mut context = LexicalScope::root();
-        self.define_function("script", 0, 0, ByteCode::default())?;
+        let name = self.interner.intern_str("<script>");
+        self.functions.push(Function {
+            name,
+            arity: 0,
+            code: Default::default(),
+            upvalue_count: 0,
+        });
+        self.closures.push(Closure {
+            function_idx: 0,
+            upvalues: Default::default(),
+        });
         for smt in smts.iter() {
             self.compile_statement(smt, &mut context, &mut result)?;
         }
+        for (_, stack_slot) in context.iter_local_upvalues() {
+            self.closures[0]
+                .upvalues
+                .push(UpValueImpl::Open(stack_slot).into());
+        }
+        self.function_by_name.insert(name, 0);
         self.functions[0].code = result;
+        self.functions[0].upvalue_count = context.upvalues.len();
         Ok(())
     }
 
@@ -281,13 +340,13 @@ impl VirtualMachine {
 
     fn pop_number(&mut self, op_code: OpCodeTypes) -> Result<f64, VirtualMachineError> {
         let value = self.pop()?;
-        Ok(value
-            .as_number()
-            .ok_or_else(|| VirtualMachineError::UnexpectedStackOperandType {
+        Ok(value.clone().try_as_number().ok_or_else(|| {
+            VirtualMachineError::UnexpectedStackOperandType {
                 instruction: op_code,
                 expected: ValueTypes::Number,
                 actual: value.into(),
-            })?)
+            }
+        })?)
     }
 
     fn is_truthy(&self, value: &Value) -> bool {
@@ -295,10 +354,8 @@ impl VirtualMachine {
             Value::Number(_x) => true,
             Value::Bool(x) => *x,
             Value::Nil => false,
-            Value::Object(_) => true,
             Value::String(_) => true,
-            Value::Function(_) => todo!(),
-            Value::Closure(_) => todo!(),
+            Value::Closure(_) => true,
         }
     }
 
@@ -307,33 +364,10 @@ impl VirtualMachine {
             (Value::Number(l), Value::Number(r)) => l == r,
             (Value::Bool(l), Value::Bool(r)) => l == r,
             (Value::Nil, Value::Nil) => true,
-            (Value::Object(l), Value::Object(r)) => match (l.ty, r.ty) {
-                (ObjectType::Function, ObjectType::Function) => l.object_id == r.object_id,
-                (ObjectType::_Class, ObjectType::_Class) => l.object_id == r.object_id,
-                (_, _) => false,
-            },
             (Value::String(l), Value::String(r)) => l == r,
+            (Value::Closure(l), Value::Closure(r)) => l == r,
             (_, _) => false,
         }
-    }
-
-    fn define_function(
-        &mut self,
-        name: &str,
-        arity: usize,
-        upvalue_count: usize,
-        code: ByteCode,
-    ) -> Result<(), VirtualMachineError> {
-        let name_idx = self.interner.intern_str(name);
-        self.function_by_name.insert(name_idx, self.functions.len());
-        self.constants.push(Value::fun(self.functions.len()));
-        self.functions.push(Function {
-            name: name_idx,
-            arity: arity,
-            code,
-            upvalue_count,
-        });
-        Ok(())
     }
 
     pub fn next_instruction(&self, code: &ByteCode) -> usize {
@@ -350,22 +384,29 @@ impl VirtualMachine {
         function.code.read_next(frame.ip)
     }
 
-    fn read_upvalues(&mut self, fun_idx: usize) -> Result<Vec<Upvalue>, VirtualMachineError> {
-        let frame = &mut self.frames[self.frame_idx];
+    fn locals_idx(&self) -> usize {
+        self.frames[self.frame_idx].locals_idx
+    }
+
+    fn read_upvalues2(&mut self, fun_idx: usize) -> Result<Vec<UpValuePtr>, VirtualMachineError> {
         let function = &mut self.functions[fun_idx];
         let mut result = Vec::with_capacity(function.upvalue_count);
         for _ in 0..function.upvalue_count {
-            let discriminant = self.functions[frame.function_idx].code.read_u8(frame.ip);
-            let mut upvalue = Upvalue::from_repr(discriminant).unwrap();
-            match &mut upvalue {
-                Upvalue::Local(idx, _) | Upvalue::Parent(idx, _) => {
-                    *idx = self.functions[frame.function_idx]
-                        .code
-                        .read_u16(frame.ip + 1);
-                }
-            }
-            frame.inc_ip(3);
-            result.push(upvalue);
+            let frame = &self.frames[self.frame_idx];
+            let is_local = self.functions[frame.function_idx].code.read_u8(frame.ip) == 1;
+            let idx = self.functions[frame.function_idx]
+                .code
+                .read_u16(frame.ip + 1);
+
+            let value = if is_local {
+                self.open_upvalues
+                    .capture_upvalue(self.locals_idx() + idx as usize)
+            } else {
+                self.closures[self.frames[self.frame_idx - 1].closure_idx].upvalues[idx as usize]
+                    .clone()
+            };
+            self.frames[self.frame_idx].inc_ip(3);
+            result.push(value);
         }
         Ok(result)
     }
@@ -475,16 +516,11 @@ impl VirtualMachine {
                             self.push(Value::String(result));
                         }
                         (left, right) => {
-                            return Err(VirtualMachineError::RuntimeError {
-                                kind: RuntimeErrorKind::Unexpected {
-                                    error: anyhow!(
-                                        "ADD: unsupported types of operands: left: {}, right: {}",
-                                        self.as_display(left),
-                                        self.as_display(right)
-                                    ),
-                                },
-                                stacktrace: self.stacktrace(),
-                            })
+                            return Err(self.unhandled_error(format!(
+                                "ADD: unsupported types of operands: left: {}, right: {}",
+                                self.as_display(left),
+                                self.as_display(right)
+                            )));
                         }
                     }
                 }
@@ -760,6 +796,18 @@ impl VirtualMachine {
                         self.as_display(ret_value.clone()),
                         self.current_line()
                     );
+
+                    for local_slot in (self.locals_idx() + 1..self.stack.len()).rev() {
+                        let value = self.pop()?;
+                        if let Some(up_value_for_slot) = self.open_upvalues.take(local_slot) {
+                            debug!(
+                                "closing slot:{local_slot}, value = {value}",
+                                value = self.as_display(value.clone())
+                            );
+                            up_value_for_slot.close(self, value);
+                        }
+                    }
+
                     self.stack.truncate(self.frames[self.frame_idx].locals_idx);
                     self.frames.pop();
                     self.frame_idx -= 1;
@@ -769,28 +817,47 @@ impl VirtualMachine {
                     continue;
                 }
                 OpCode::GETUPVALUE(idx) => {
+                    debug!(
+                        "@{at} GETUPVALUE {idx} [line: {line}]",
+                        at = self.ip(),
+                        line = self.current_line()
+                    );
                     let frame = &self.frames[self.frame_idx];
-                    match self.closures[frame.closure_idx].upvalues[idx as usize] {
-                        Upvalue::Local(idx, _) => {
-                            self.push(
-                                self.stack
-                                    [self.frames[self.frame_idx - 1].locals_idx + idx as usize]
-                                    .clone(),
-                            );
-                        }
-                        Upvalue::Parent(_, _) => todo!(),
-                    }
+                    let up_value = &self.closures[frame.closure_idx].upvalues[idx as usize];
+                    self.push(up_value.get_value(self)?);
                 }
-                OpCode::SETUPVALUE(idx) => todo!(),
+                OpCode::SETUPVALUE(_idx) => todo!(),
                 OpCode::CLOSURE(function_idx) => {
+                    debug!(
+                        "@{at} CLOSURE {function_idx} [line: {line}]",
+                        at = self.ip(),
+                        line = self.current_line()
+                    );
                     self.frames[self.frame_idx].inc_ip(size);
-                    let upvalues = self.read_upvalues(function_idx as usize)?;
                     self.push(Value::closure(self.closures.len()));
+                    let upvalues2 = self.read_upvalues2(function_idx as usize)?;
                     self.closures.push(Closure {
                         function_idx: function_idx as usize,
-                        upvalues,
+                        upvalues: upvalues2,
                     });
                     continue;
+                }
+                OpCode::CLOSEUPVALUE => {
+                    debug!(
+                        "@{at} CLOSEUPVALUE {value} [line: {line}]",
+                        at = self.ip(),
+                        line = self.current_line(),
+                        value = self.as_display(self.stack.last().cloned().unwrap()),
+                    );
+                    let upvalue =
+                        self.open_upvalues
+                            .take(self.stack.len() - 1)
+                            .ok_or_else(|| {
+                                self.unhandled_error("Upvalue expected to exist for slot")
+                            })?;
+
+                    let stack_value = self.pop()?;
+                    upvalue.close(self, stack_value);
                 }
             }
             self.frames[self.frame_idx].inc_ip(size);
@@ -801,6 +868,33 @@ impl VirtualMachine {
 
     pub fn patch_offset(&mut self, code: &mut ByteCode, addr: usize, new_offset: JumpOffset) {
         code.patch_offset(addr, new_offset);
+    }
+
+    fn compile_declaration_from_stack<'a>(
+        &mut self,
+        ident: &'a AstIdent,
+        context: &mut LexicalScope<'a>,
+        result: &mut ByteCode,
+    ) -> Result<(), VirtualMachineError> {
+        if context.is_toplevel() {
+            let ident_idx = self.interner.intern_str(ident.node());
+            result.write_op(
+                OpCode::DECLAREGLOBAL(ident_idx),
+                self.lookup_source_line(ident.start()),
+            );
+        } else {
+            if context.is_already_declared(&ident.node) {
+                return Err(VirtualMachineError::CompileError(vec![
+                    ParseError::VariableAlreadyDeclared { span: ident.span },
+                ]));
+            }
+            let offset = context.new_local(ident.node());
+            result.write_op(
+                OpCode::SETLOCAL(offset as u16),
+                self.lookup_source_line(ident.start()),
+            )
+        }
+        Ok(())
     }
 
     pub fn compile_statement<'a>(
@@ -821,7 +915,11 @@ impl VirtualMachine {
                 Ok(())
             }
 
-            crate::parser::Stmt::Declarations(StmtDeclaration::Function { name, params, body }) => {
+            crate::parser::Stmt::Declarations(StmtDeclaration::Function(FunDeclaration {
+                name,
+                params,
+                body,
+            })) => {
                 if context.is_already_declared(&name.node()) {
                     return Err(VirtualMachineError::CompileError(vec![
                         ParseError::VariableAlreadyDeclared { span: name.span },
@@ -831,46 +929,32 @@ impl VirtualMachine {
                 let mut byte_code = ByteCode::default();
                 context.function_decl(name.node(), params.iter().map(|x| x.node().as_str()));
                 //self.define_function(&name.node(), params.len(), 0, Default::default())?;
-
                 let mut function = Function {
                     arity: params.len(),
                     code: ByteCode::default(),
                     name: self.interner.intern_str(&name.node),
                     upvalue_count: 0,
                 };
-                self.compile_statement(&body, context, &mut byte_code)?;
+                self.compile_statement(body, context, &mut byte_code)?;
                 byte_code.write_op(OpCode::NIL, self.lookup_source_line(body.end()));
                 byte_code.write_op(OpCode::RET, self.lookup_source_line(body.end()));
                 function.code = byte_code;
-                function.upvalue_count = context.upvalues.len();
-
-                result.write_op(
-                    OpCode::CLOSURE(self.functions.len() as u16),
-                    self.lookup_source_line(name.start()),
-                );
-                for (_, i) in &context.upvalues {
-                    i.write_to(result, self.lookup_source_line(name.start()));
-                }
-
                 self.function_by_name.insert(
                     self.interner.intern_str(context.name()),
                     self.functions.len(),
                 );
-                self.functions.push(function);
-                context.leave_function();
-                let name_idx = self.interner.intern_str(&name.node());
-                if context.is_toplevel() {
-                    result.write_op(
-                        OpCode::DECLAREGLOBAL(name_idx),
-                        self.lookup_source_line(name.start()),
-                    )
-                } else {
-                    let offset = context.new_local(name.node());
-                    result.write_op(
-                        OpCode::SETLOCAL(offset as u16),
-                        self.lookup_source_line(name.start()),
-                    )
+                function.upvalue_count = context.upvalues.len();
+                result.write_op(
+                    OpCode::CLOSURE((self.functions.len()) as u16),
+                    self.lookup_source_line(name.start()),
+                );
+                for (_, up) in context.upvalues.iter() {
+                    up.write_to(result, self.lookup_source_line(name.start()));
                 }
+                context.leave_function();
+                self.functions.push(function);
+
+                self.compile_declaration_from_stack(name, context, result)?;
                 Ok(())
             }
 
@@ -880,30 +964,19 @@ impl VirtualMachine {
                 } else {
                     result.write_op(OpCode::NIL, self.lookup_source_line(ident.start()));
                 }
-                if context.is_toplevel() {
-                    let ident_idx = self.interner.intern_str(ident.node());
-                    result.write_op(
-                        OpCode::DECLAREGLOBAL(ident_idx),
-                        self.lookup_source_line(ident.start()),
-                    );
-                } else {
-                    if context.is_already_declared(&ident.node) {
-                        return Err(VirtualMachineError::CompileError(vec![
-                            ParseError::VariableAlreadyDeclared { span: ident.span },
-                        ]));
-                    }
-                    let offset = context.new_local(ident.node());
-                    result.write_op(
-                        OpCode::SETLOCAL(offset as u16),
-                        self.lookup_source_line(ident.start()),
-                    )
-                }
-                Ok(())
+                self.compile_declaration_from_stack(ident, context, result)
             }
             crate::parser::Stmt::Block(block) => {
                 context.enter_block();
                 for each_stmt in block.0.iter() {
                     self.compile_statement(each_stmt, context, result)?;
+                }
+                for (_, captured) in context.iter_locals_in_block_rev() {
+                    if captured {
+                        result.write_op(OpCode::CLOSEUPVALUE, self.lookup_source_line(stmt.end()));
+                    } else {
+                        result.write_op(OpCode::POP, self.lookup_source_line(stmt.end()));
+                    }
                 }
                 context.leave_block();
                 Ok(())
@@ -1036,6 +1109,38 @@ impl VirtualMachine {
         }
     }
 
+    fn compile_assignment_from_stack<'a>(
+        &mut self,
+        name: &'a str,
+        span: Span,
+        context: &mut LexicalScope<'a>,
+        result: &mut ByteCode,
+    ) -> Result<(), VirtualMachineError> {
+        if let Some(offset) = context.resolve_local(name) {
+            result.write_op(
+                OpCode::SETLOCAL(offset as u16),
+                self.lookup_source_line(span.start()),
+            )
+        } else {
+            match context.resolve_upvalue(name) {
+                Some((idx, _)) => {
+                    result.write_op(
+                        OpCode::SETUPVALUE(idx as u16),
+                        self.lookup_source_line(span.start()),
+                    );
+                }
+                _ => {
+                    let idx = self.interner.intern_str(&name);
+                    result.write_op(
+                        OpCode::SETGLOBAL(idx),
+                        self.lookup_source_line(span.start()),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn compile_expr<'a>(
         &mut self,
         expr: &'a AstExpression,
@@ -1046,28 +1151,7 @@ impl VirtualMachine {
             crate::parser::Expression::Assignment { lvalue, rvalue } => {
                 if let Expression::Identier(name) = lvalue.node() {
                     self.compile_expr(rvalue, context, result)?;
-                    if let Some(offset) = context.resolve_local(name.as_str()) {
-                        result.write_op(
-                            OpCode::SETLOCAL(offset as u16),
-                            self.lookup_source_line(lvalue.start()),
-                        )
-                    } else {
-                        match context.resolve_upvalue(name.as_str()) {
-                            Some((idx, _)) => {
-                                result.write_op(
-                                    OpCode::SETUPVALUE(idx as u16),
-                                    self.lookup_source_line(expr.start()),
-                                );
-                            }
-                            _ => {
-                                let idx = self.interner.intern_str(&name);
-                                result.write_op(
-                                    OpCode::SETGLOBAL(idx),
-                                    self.lookup_source_line(expr.start()),
-                                );
-                            }
-                        }
-                    }
+                    self.compile_assignment_from_stack(&name, expr.span, context, result)?;
                 }
             }
             crate::parser::Expression::Identier(name) => {
@@ -1219,6 +1303,15 @@ impl VirtualMachine {
     fn lookup_source_line(&self, start: usize) -> usize {
         self.codemap.line_at(start).unwrap_or(0)
     }
+
+    fn unhandled_error(&self, error: impl Into<String>) -> VirtualMachineError {
+        VirtualMachineError::RuntimeError {
+            kind: RuntimeErrorKind::Unexpected {
+                error: anyhow::Error::msg(error.into()),
+            },
+            stacktrace: self.stacktrace(),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -1244,8 +1337,8 @@ impl UpvalueRef {
 
 pub struct LexicalScope<'a> {
     parent: Option<Box<LexicalScope<'a>>>,
-    args: Vec<&'a str>,
-    locals: Vec<(&'a str, usize)>,
+    args: Vec<(&'a str, bool)>,
+    locals: Vec<(&'a str, usize, bool)>,
     upvalues: Vec<(&'a str, UpvalueRef)>,
     block_depth: usize,
     name: Option<String>,
@@ -1276,8 +1369,8 @@ impl<'a> LexicalScope<'a> {
             parent: None,
             args: {
                 let mut a = Vec::new();
-                a.push(name);
-                a.extend(args);
+                a.push((name, false));
+                a.extend(args.into_iter().map(|x| (x, false)));
                 a
             },
             block_depth: self.block_depth,
@@ -1289,8 +1382,6 @@ impl<'a> LexicalScope<'a> {
                 .map(|p_name| Some(format!("{}/{}", p_name, name)))
                 .unwrap_or_else(|| Some(name.to_owned())),
         };
-
-        //for (i, local) in self.new_local(name)
 
         let prev = mem::replace(self, new);
         self.parent = Some(Box::new(prev));
@@ -1306,7 +1397,6 @@ impl<'a> LexicalScope<'a> {
             upvalues,
             name,
         } = *parent;
-
         self.args = args;
         self.block_depth = block_depth;
         self.locals = locals;
@@ -1323,7 +1413,7 @@ impl<'a> LexicalScope<'a> {
         self.block_depth -= 1;
 
         loop {
-            if let Some((_, d)) = self.locals.last() {
+            if let Some((_, d, _)) = self.locals.last() {
                 if *d > self.block_depth {
                     self.locals.pop();
                     continue;
@@ -1334,19 +1424,36 @@ impl<'a> LexicalScope<'a> {
     }
 
     pub fn new_local(&mut self, name: &'a str) -> usize {
-        self.locals.push((name, self.block_depth));
+        self.locals.push((name, self.block_depth, false));
         self.args.len() + self.locals.len() - 1
     }
 
+    pub fn iter_local_upvalues(&self) -> impl Iterator<Item = (&str, usize)> {
+        self.upvalues
+            .iter()
+            .filter_map(|(name, value)| match value {
+                UpvalueRef::Local(idx) => Some((*name, *idx)),
+                _ => None,
+            })
+    }
+
+    pub fn iter_locals_in_block_rev(&self) -> impl Iterator<Item = (&str, bool)> {
+        self.locals
+            .iter()
+            .rev()
+            .take_while(|(_, depth, _)| *depth == self.block_depth)
+            .map(|(name, _, c)| (*name, *c))
+    }
+
     pub fn is_already_declared(&self, name: &'a str) -> bool {
-        for (i, arg_name) in self.args.iter().enumerate() {
+        for (arg_name, _) in self.args.iter() {
             if arg_name.eq(&name) {
                 return true;
             }
         }
 
         for i in (0..self.locals.len()).rev() {
-            let (n, d) = self.locals[i];
+            let (n, d, _) = self.locals[i];
             if d < self.block_depth {
                 break;
             }
@@ -1358,15 +1465,37 @@ impl<'a> LexicalScope<'a> {
         return false;
     }
 
+    fn capture_local(&mut self, name: &str) -> Option<usize> {
+        for i in 0..self.args.len() {
+            let (n, _) = self.args[i];
+            if n.eq(name) {
+                self.args[i].1 = true;
+                return Some(i);
+            }
+        }
+
+        for i in (0..self.locals.len()).rev() {
+            let (n, _, _) = self.locals[i];
+            if n.eq(name) {
+                self.locals[i].2 = true;
+                //self.upvalues
+                //  .push((n, UpvalueRef::Local(self.args.len() + i)));
+                return Some(self.args.len() + i);
+            }
+        }
+
+        None
+    }
+
     pub fn resolve_local(&self, name: &str) -> Option<usize> {
-        for (i, arg_name) in self.args.iter().enumerate() {
+        for (i, (arg_name, _)) in self.args.iter().enumerate() {
             if arg_name.eq(&name) {
                 return Some(i);
             }
         }
 
         for i in (0..self.locals.len()).rev() {
-            let (n, _) = self.locals[i];
+            let (n, _, _) = self.locals[i];
             if n.eq(name) {
                 return Some(self.args.len() + i);
             }
@@ -1375,10 +1504,6 @@ impl<'a> LexicalScope<'a> {
     }
 
     pub fn resolve_upvalue(&mut self, name: &'a str) -> Option<(usize, UpvalueRef)> {
-        if self.is_toplevel() {
-            return None;
-        }
-
         if let Some((i, (_, value))) = self
             .upvalues
             .iter()
@@ -1388,7 +1513,7 @@ impl<'a> LexicalScope<'a> {
             return Some((i, value.to_owned()));
         }
 
-        if let Some(local_idx) = self.parent.as_ref().and_then(|x| x.resolve_local(name)) {
+        if let Some(local_idx) = self.parent.as_mut().and_then(|x| x.capture_local(name)) {
             let value = UpvalueRef::Local(local_idx);
             self.upvalues.push((name, value.clone()));
             return Some((self.upvalues.len() - 1, value));
@@ -1415,17 +1540,17 @@ impl<'a> Display for DispayValue<'a> {
             Value::Number(x) => write!(f, "{}", x),
             Value::Bool(x) => write!(f, "{}", x),
             Value::Nil => f.write_str("nil"),
-
-            Value::Object(ObjectValue {
-                ty: ObjectType::Function,
-                object_id: fun_idx,
-            }) => write!(
-                f,
-                "<fn {}>",
-                self.vm.interner.get_str(self.vm.functions[fun_idx].name,),
-            ),
             Value::String(str_id) => f.write_str(self.vm.interner.get_str(str_id)),
-            _ => todo!(),
+            Value::Closure(ClosureValue { closure_id }) => {
+                let closure = &self.vm.closures[closure_id];
+                write!(
+                    f,
+                    "<fn {}>",
+                    self.vm
+                        .interner
+                        .get_str(self.vm.functions[closure.function_idx].name)
+                )
+            }
         }
     }
 }
@@ -1434,7 +1559,21 @@ impl<'a> Display for DispayValue<'a> {
 mod tests {
     use pretty_assertions::assert_eq;
 
-    use crate::vm::LexicalScope;
+    use crate::vm::{LexicalScope, UpvalueRef};
+
+    #[test]
+    fn test_blocks() {
+        let mut scope = LexicalScope::root();
+        scope.enter_block();
+        scope.new_local("y");
+        scope.enter_block();
+        scope.new_local("z");
+        scope.new_local("y");
+        assert_eq!(
+            scope.iter_locals_in_block_rev().collect::<Vec<_>>(),
+            vec![("y", false), ("z", false)]
+        );
+    }
 
     #[test]
     fn test_is_already_defined() {
@@ -1474,19 +1613,15 @@ mod tests {
         scope.enter_block();
         scope.new_local("b");
         scope.function_decl("f1", ["x"]);
-        assert_eq!(
-            scope.resolve_upvalue("b"),
-            Some((0, crate::vm::UpvalueRef::Local(0)))
-        );
         scope.function_decl("inner", ["y"]);
         assert_eq!(
             scope.resolve_upvalue("x"),
             Some((0, crate::vm::UpvalueRef::Local(1)))
         );
-        assert_eq!(
-            scope.resolve_upvalue("b"),
-            Some((1, crate::vm::UpvalueRef::Upvalue(0)))
-        );
+        scope.leave_function();
+        assert_eq!(scope.upvalues.iter().cloned().collect::<Vec<_>>(), vec![]);
+        scope.leave_function();
+        assert_eq!(scope.upvalues.iter().cloned().collect::<Vec<_>>(), vec![]);
     }
 
     #[test]
@@ -1520,5 +1655,61 @@ mod tests {
 
         assert_eq!(scope.upvalues.len(), 1);
         assert_eq!(scope.parent.unwrap().upvalues.len(), 2);
+    }
+
+    #[test]
+    fn test_closing_upvalues() {
+        let mut scope = LexicalScope::root();
+        scope.enter_block();
+        scope.new_local("a");
+        scope.new_local("b");
+
+        scope.function_decl("add", ["x"]);
+        scope.enter_block();
+
+        scope.function_decl("p", []);
+        scope.enter_block();
+        scope.resolve_upvalue("x");
+        scope.resolve_upvalue("a");
+        scope.resolve_upvalue("b");
+        assert_eq!(
+            scope.upvalues.iter().cloned().collect::<Vec<_>>(),
+            vec![
+                ("x", UpvalueRef::Local(1)),
+                ("a", UpvalueRef::Upvalue(0)),
+                ("b", UpvalueRef::Upvalue(1))
+            ]
+        );
+        scope.leave_block();
+        scope.leave_function();
+        scope.new_local("p");
+        scope.resolve_local("p");
+        assert_eq!(
+            scope.iter_local_upvalues().collect::<Vec<_>>(),
+            vec![("a", 0), ("b", 1)]
+        );
+        assert_eq!(
+            scope.upvalues.iter().cloned().collect::<Vec<_>>(),
+            vec![("a", UpvalueRef::Local(0)), ("b", UpvalueRef::Local(1))]
+        );
+        scope.leave_block();
+        scope.leave_function();
+        assert_eq!(
+            scope.iter_locals_in_block_rev().collect::<Vec<_>>(),
+            vec![("b", true), ("a", true)]
+        );
+    }
+
+    #[test]
+    fn test_fun_captures_in_block() {
+        let mut scope = LexicalScope::root();
+        scope.enter_block();
+        scope.new_local("isEven");
+        scope.function_decl("isOdd", ["n"]);
+        scope.enter_block();
+        assert_eq!(
+            scope.resolve_upvalue("isEven"),
+            Some((0, UpvalueRef::Local(0)))
+        )
     }
 }
