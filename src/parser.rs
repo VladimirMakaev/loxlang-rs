@@ -197,7 +197,7 @@ pub enum Stmt {
     While(WhileStmt),
     For(ForStmt),
     Block(BlockStmt),
-    Return(AstExpression),
+    Return(Option<AstExpression>),
     Expression(AstExpression),
 }
 
@@ -505,10 +505,14 @@ impl<'source> Parser<'source> {
 
     fn return_statement(&mut self) -> StmtResult {
         let return_token = self.consume(TokenType::RETURN)?;
+        if let Some(semi) = self.match_token(TokenType::Semicolon)? {
+            let span = Span::new(return_token.start(), semi.end());
+            return Ok(Stmt::Return(None).ast(span));
+        }
         let expr = self.expression()?;
         let span = Span::new(return_token.start(), expr.end());
         self.consume(TokenType::Semicolon)?;
-        Ok(Stmt::Return(expr).ast(span))
+        Ok(Stmt::Return(Some(expr)).ast(span))
     }
 
     fn check_token(&mut self, token_type: TokenType) -> Result<bool, ParseError> {

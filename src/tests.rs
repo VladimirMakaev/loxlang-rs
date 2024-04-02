@@ -18,6 +18,14 @@ pub fn test_assignment(code: &str) -> anyhow::Result<()> {
     verify_code(code)
 }
 
+const RETURN_RETURN_NIL_IF_NO_VALUE: &str =
+    include_str!("../tests/return/return_nil_if_no_value.lox");
+
+#[test_case(RETURN_RETURN_NIL_IF_NO_VALUE)]
+pub fn test_return(code: &str) -> anyhow::Result<()> {
+    verify_code(code)
+}
+
 const CONTROL_FLOW_SIMPLE_IF: &'static str = include_str!("../tests/control_flow/simple_if.lox");
 const CONTROL_FLOW_IF_ELSE: &'static str = include_str!("../tests/control_flow/if_else.lox");
 const CONTROL_FLOW_AND_OR: &'static str = include_str!("../tests/control_flow/and_or.lox");

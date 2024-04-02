@@ -1102,7 +1102,11 @@ impl VirtualMachine {
                 Ok(())
             }
             crate::parser::Stmt::Return(value) => {
-                self.compile_expr(value, context, result)?;
+                if let Some(value) = value {
+                    self.compile_expr(value, context, result)?;
+                } else {
+                    result.write_op(OpCode::NIL, self.lookup_source_line(stmt.start()));
+                }
                 result.write_op(OpCode::RET, self.lookup_source_line(stmt.start()));
                 Ok(())
             }
