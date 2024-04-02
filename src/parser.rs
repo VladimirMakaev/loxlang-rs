@@ -41,14 +41,16 @@ pub enum ParseError {
     },
     #[error("Expect expression.")]
     ExpectedExpression { span: Span },
-    #[error("Expected unary operator. Found {found:?}")]
-    UnexpectedUnaryOperator { found: TokenType },
-    #[error("Expected boolean literal. Found {found:?}")]
-    UnsatisfiedBoolLiteral { found: TokenType },
+    #[error("Expected unary operator.")]
+    UnexpectedUnaryOperator { span: Span },
+    #[error("Expected boolean literal.")]
+    UnsatisfiedBoolLiteral { span: Span },
     #[error("Expect variable name")]
     InvalidVariableName { span: Span },
     #[error("Invalid assignment target.")]
     InvalidAssignmentTarget { span: Span },
+    #[error("Can't return from top-level code.")]
+    InvalidTopLevelReturn { span: Span },
     #[error("Can't have more than 255 arguments.")]
     MaxFunCallArguments { span: Span },
     #[error("Can't have more than 255 parameters.")]
@@ -112,6 +114,7 @@ impl<T> Spanned<T> {
 pub type AstExpression = Spanned<Expression>;
 pub type AstStmt = Spanned<Stmt>;
 pub type AstIdent = Spanned<String>;
+pub type AstReturn = Spanned<String>;
 
 #[derive(Debug, strum::Display)]
 pub enum AstLiteral {
@@ -197,7 +200,7 @@ pub enum Stmt {
     While(WhileStmt),
     For(ForStmt),
     Block(BlockStmt),
-    Return(Option<AstExpression>),
+    Return(AstReturn, Option<AstExpression>),
     Expression(AstExpression),
 }
 
@@ -507,12 +510,26 @@ impl<'source> Parser<'source> {
         let return_token = self.consume(TokenType::RETURN)?;
         if let Some(semi) = self.match_token(TokenType::Semicolon)? {
             let span = Span::new(return_token.start(), semi.end());
-            return Ok(Stmt::Return(None).ast(span));
+            return Ok(Stmt::Return(
+                return_token
+                    .slice(self.code)
+                    .to_owned()
+                    .ast(return_token.span()),
+                None,
+            )
+            .ast(span));
         }
         let expr = self.expression()?;
         let span = Span::new(return_token.start(), expr.end());
         self.consume(TokenType::Semicolon)?;
-        Ok(Stmt::Return(Some(expr)).ast(span))
+        Ok(Stmt::Return(
+            return_token
+                .slice(self.code)
+                .to_owned()
+                .ast(return_token.span()),
+            Some(expr),
+        )
+        .ast(span))
     }
 
     fn check_token(&mut self, token_type: TokenType) -> Result<bool, ParseError> {
@@ -650,7 +667,7 @@ impl<'source> Parser<'source> {
             }
             .ast(span)),
             _ => Err(ParseError::UnexpectedUnaryOperator {
-                found: operator.ty(),
+                span: operator.span(),
             }),
         }
     }
@@ -752,7 +769,7 @@ impl<'source> Parser<'source> {
             TokenType::FALSE => {
                 Ok(Expression::Literal(AstLiteral::BoolLiteral(false)).ast(bool.span()))
             }
-            _ => Err(ParseError::UnsatisfiedBoolLiteral { found: bool.ty() }),
+            _ => Err(ParseError::UnsatisfiedBoolLiteral { span: bool.span() }),
         }
     }
 

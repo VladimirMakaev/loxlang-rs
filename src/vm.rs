@@ -1101,7 +1101,12 @@ impl VirtualMachine {
                 context.leave_block();
                 Ok(())
             }
-            crate::parser::Stmt::Return(value) => {
+            crate::parser::Stmt::Return(ret, value) => {
+                if context.is_toplevel() {
+                    return Err(VirtualMachineError::CompileError(vec![
+                        ParseError::InvalidTopLevelReturn { span: ret.span },
+                    ]));
+                }
                 if let Some(value) = value {
                     self.compile_expr(value, context, result)?;
                 } else {
@@ -1536,6 +1541,76 @@ impl<'a> LexicalScope<'a> {
 pub struct DispayValue<'a> {
     vm: &'a VirtualMachine,
     value: Value,
+}
+
+pub struct DisplayError<'a> {
+    pub(crate) err: &'a VirtualMachineError,
+    pub(crate) code: &'a str,
+    pub(crate) codemap: &'a Codemap,
+}
+
+impl<'a> DisplayError<'a> {
+    fn report_error_with_span(
+        code: &str,
+        codemap: &Codemap,
+        f: &mut Formatter<'_>,
+        span: &Span,
+        error: impl Display,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{}Error at '{}': {}",
+            {
+                if let Some(line) = codemap.line_at(span.start()) {
+                    format!("[line {}] ", line)
+                } else {
+                    String::from("")
+                }
+            },
+            span.slice(code),
+            error
+        )
+    }
+}
+
+impl<'a> Display for DisplayError<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.err {
+            VirtualMachineError::CompileError(parsing_errors) => {
+                for error in parsing_errors.iter() {
+                    match error {
+                        ParseError::VariableAlreadyDeclared { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::UnexpectedToken { span, .. } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::InvalidVariableName { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::InvalidAssignmentTarget { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::InvalidTopLevelReturn { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::ExpectedExpression { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::MaxFunCallArguments { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::MaxFunDeclarationParameters { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        _ => writeln!(f, "{}", error)?,
+                    }
+                }
+            }
+            _ => writeln!(f, "{}", self.err)?,
+        }
+        Ok(())
+    }
 }
 
 impl<'a> Display for DispayValue<'a> {

@@ -4,7 +4,7 @@ use regex::Regex;
 
 use test_case::test_case;
 
-use crate::vm::VirtualMachine;
+use crate::vm::{DisplayError, VirtualMachine};
 
 const ASSIGNMENT_ASSOSIATIVIY: &'static str = include_str!("../tests/assignment/associativity.lox");
 const ASSIGNMENT_GLOBAL: &'static str = include_str!("../tests/assignment/global.lox");
@@ -21,7 +21,10 @@ pub fn test_assignment(code: &str) -> anyhow::Result<()> {
 const RETURN_RETURN_NIL_IF_NO_VALUE: &str =
     include_str!("../tests/return/return_nil_if_no_value.lox");
 
+const RETURN_AT_TOP_LEVEL: &str = include_str!("../tests/return/at_top_level.lox");
+
 #[test_case(RETURN_RETURN_NIL_IF_NO_VALUE)]
+#[test_case(RETURN_AT_TOP_LEVEL)]
 pub fn test_return(code: &str) -> anyhow::Result<()> {
     verify_code(code)
 }
@@ -93,7 +96,20 @@ pub fn test_closure(code: &str) -> anyhow::Result<()> {
 
 fn verify_code(code: &str) -> anyhow::Result<()> {
     let mut vm = VirtualMachine::new();
-    vm.compile(code)?;
+    if let Err(err) = vm.compile(code) {
+        let error_expectations = collect_error_expectations(code);
+        if error_expectations.is_empty() {
+            return Err(err.into());
+        }
+
+        let error_line = DisplayError {
+            code,
+            err: &err,
+            codemap: &vm.codemap,
+        }
+        .to_string();
+        assert_eq!(error_expectations.join("\n"), error_line);
+    }
     let mut stdout = Vec::<u8>::new();
     let res = vm.run(&mut stdout);
 
@@ -141,6 +157,25 @@ fn collect_stderr_expectations(code: &str) -> Vec<String> {
     for capture in regex.captures_iter(code) {
         if let Some(m) = capture.get(1) {
             result.push(m.as_str().into());
+        }
+    }
+    result
+}
+
+fn collect_error_expectations(code: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let regex = Regex::new("//([ ]*)(Error at (.+))").unwrap();
+    let buf = BufReader::new(code.as_bytes());
+    for (line_no, line) in buf.lines().enumerate() {
+        let line = line.unwrap();
+        for capture in regex.captures_iter(&line) {
+            if let Some(m) = capture.get(2) {
+                result.push(format!(
+                    "[line {line_no_at1}] {match_str}",
+                    line_no_at1 = line_no + 1,
+                    match_str = m.as_str()
+                ));
+            }
         }
     }
     result
