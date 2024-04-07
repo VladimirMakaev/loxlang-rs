@@ -87,9 +87,10 @@ pub fn test_fun(code: &str) -> anyhow::Result<()> {
 
 const CLOSURE_SIMPLE: &str = include_str!("../tests/closure/simple.lox");
 const CLOSURE_CLOSED_UPVALUES: &str = include_str!("../tests/closure/closed_upvalues.lox");
-
+const CLOSURE_NESTED_CLOSURE: &str = include_str!("../tests/closure/nested_closure.lox");
 #[test_case(CLOSURE_SIMPLE)]
 #[test_case(CLOSURE_CLOSED_UPVALUES)]
+#[test_case(CLOSURE_NESTED_CLOSURE)]
 pub fn test_closure(code: &str) -> anyhow::Result<()> {
     verify_code(code)
 }

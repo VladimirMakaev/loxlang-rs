@@ -388,7 +388,7 @@ impl VirtualMachine {
         self.frames[self.frame_idx].locals_idx
     }
 
-    fn read_upvalues2(&mut self, fun_idx: usize) -> Result<Vec<UpValuePtr>, VirtualMachineError> {
+    fn read_upvalues(&mut self, fun_idx: usize) -> Result<Vec<UpValuePtr>, VirtualMachineError> {
         let function = &mut self.functions[fun_idx];
         let mut result = Vec::with_capacity(function.upvalue_count);
         for _ in 0..function.upvalue_count {
@@ -402,8 +402,18 @@ impl VirtualMachine {
                 self.open_upvalues
                     .capture_upvalue(self.locals_idx() + idx as usize)
             } else {
-                self.closures[self.frames[self.frame_idx - 1].closure_idx].upvalues[idx as usize]
-                    .clone()
+                let parent_frame = &self.frames[self.frame_idx];
+                let vec = &self.closures[parent_frame.closure_idx].upvalues;
+                let v = vec.get(idx as usize).ok_or_else(|| {
+                    self.unhandled_error(format!(
+                        "Parent closure {name} has {n} upvalues",
+                        name = self
+                            .interner
+                            .get_str(self.functions[parent_frame.function_idx].name),
+                        n = vec.len()
+                    ))
+                })?;
+                v.clone()
             };
             self.frames[self.frame_idx].inc_ip(3);
             result.push(value);
@@ -835,10 +845,17 @@ impl VirtualMachine {
                     );
                     self.frames[self.frame_idx].inc_ip(size);
                     self.push(Value::closure(self.closures.len()));
-                    let upvalues2 = self.read_upvalues2(function_idx as usize)?;
+                    let upvalues = self.read_upvalues(function_idx as usize)?;
+                    debug!(
+                        "Closure {name} has {n} upvalues",
+                        name = self
+                            .interner
+                            .get_str(self.functions[function_idx as usize].name),
+                        n = upvalues.len()
+                    );
                     self.closures.push(Closure {
                         function_idx: function_idx as usize,
-                        upvalues: upvalues2,
+                        upvalues,
                     });
                     continue;
                 }
