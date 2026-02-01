@@ -855,39 +855,59 @@ impl VirtualMachine {
                         self.current_line()
                     );
 
-                    if let Value::Object(closure_ref) = callee {
-                        let closure_ref = *closure_ref;
-                        // Check if it's a closure
-                        if let ObjKind::Closure(closure) = &self.heap.get(closure_ref).kind {
-                            let function = self.get_heap_function(closure.function);
-                            if function.arity != arg_count {
+                    if let Value::Object(obj_ref) = callee {
+                        let obj_ref = *obj_ref;
+                        match &self.heap.get(obj_ref).kind {
+                            ObjKind::Closure(closure) => {
+                                let function = self.get_heap_function(closure.function);
+                                if function.arity != arg_count {
+                                    return Err(VirtualMachineError::RuntimeError {
+                                        kind: RuntimeErrorKind::InvalidFunArity {
+                                            got: arg_count,
+                                            expected: function.arity,
+                                        },
+                                        stacktrace: self.stacktrace(),
+                                    });
+                                }
+                                // Check for stack overflow before pushing new frame
+                                if self.frames.len() >= FRAMES_MAX {
+                                    return Err(VirtualMachineError::RuntimeError {
+                                        kind: RuntimeErrorKind::StackOverflow,
+                                        stacktrace: self.stacktrace(),
+                                    });
+                                }
+                                self.frames.push(CallFrame {
+                                    ip: 0,
+                                    closure: obj_ref,
+                                    locals_idx: self.stack.len() - arg_count - 1,
+                                });
+                                self.frame_idx += 1;
+                                continue;
+                            }
+                            ObjKind::Class(_) => {
+                                // No initializer yet (Phase 5 will add init support)
+                                // For now, classes take 0 arguments
+                                if arg_count != 0 {
+                                    return Err(VirtualMachineError::RuntimeError {
+                                        kind: RuntimeErrorKind::InvalidFunArity {
+                                            got: arg_count,
+                                            expected: 0,
+                                        },
+                                        stacktrace: self.stacktrace(),
+                                    });
+                                }
+                                // Create instance and replace class on stack
+                                let instance_ref = self.alloc_instance(obj_ref);
+                                let stack_pos = self.stack.len() - 1;
+                                self.stack[stack_pos] = Value::Object(instance_ref);
+                                // No call frame needed - continue execution
+                            }
+                            _ => {
                                 return Err(VirtualMachineError::RuntimeError {
-                                    kind: RuntimeErrorKind::InvalidFunArity {
-                                        got: arg_count,
-                                        expected: function.arity,
-                                    },
+                                    kind: RuntimeErrorKind::InvalidCallee,
                                     stacktrace: self.stacktrace(),
                                 });
                             }
-                            // Check for stack overflow before pushing new frame
-                            if self.frames.len() >= FRAMES_MAX {
-                                return Err(VirtualMachineError::RuntimeError {
-                                    kind: RuntimeErrorKind::StackOverflow,
-                                    stacktrace: self.stacktrace(),
-                                });
-                            }
-                            self.frames.push(CallFrame {
-                                ip: 0,
-                                closure: closure_ref,
-                                locals_idx: self.stack.len() - arg_count - 1,
-                            });
-                            self.frame_idx += 1;
-                            continue;
-                        } else {
-                            return Err(VirtualMachineError::RuntimeError {
-                                kind: RuntimeErrorKind::InvalidCallee,
-                                stacktrace: self.stacktrace(),
-                            });
                         }
                     } else {
                         return Err(VirtualMachineError::RuntimeError {
