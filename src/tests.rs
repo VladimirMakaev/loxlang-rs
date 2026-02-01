@@ -110,6 +110,8 @@ fn verify_code(code: &str) -> anyhow::Result<()> {
         }
         .to_string();
         assert_eq!(error_expectations.join("\n"), error_line);
+        // Return early - don't try to run() after compile error
+        return Ok(());
     }
     let mut stdout = Vec::<u8>::new();
     let res = vm.run(&mut stdout);

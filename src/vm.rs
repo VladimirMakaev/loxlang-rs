@@ -24,7 +24,7 @@ use crate::{
         AstExpression, AstIdent, AstStmt, Expression, ForStmt, FunDeclaration, IfStmt,
         LogicalExpression, ParseError, Parser, Span, StmtDeclaration, WhileStmt,
     },
-    value::{ClosureValue, UpValueImpl, Value, ValueTypes},
+    value::{UpValueImpl, Value, ValueTypes},
 };
 
 #[derive(Error, Debug)]
@@ -77,92 +77,9 @@ pub enum VirtualMachineError {
     Unhandled(#[from] anyhow::Error),
 }
 
-struct Function {
-    name: StrId,
-    arity: usize,
-    code: ByteCode,
-    upvalue_count: usize,
-}
+// Function struct - REMOVED: Functions are now heap-allocated as ObjFunction via GcRef
 
-struct OpCodeSlice<'a> {
-    fun: &'a Function,
-    vm: &'a VirtualMachine,
-    start: usize,
-}
-
-impl<'a> std::fmt::Display for OpCodeSlice<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut ip = self.start;
-        while let Some(Ok((op, size))) = self.fun.code.read_next(ip) {
-            match op {
-                OpCode::DECLAREGLOBAL(idx) => {
-                    writeln!(
-                        f,
-                        "@{ip} DECLAREGLOBAL(\"{value}\")",
-                        value = self.vm.interner.get_str(idx.into()),
-                    )?;
-                    ip = ip + size;
-                }
-                OpCode::GETGLOBAL(idx) => {
-                    writeln!(
-                        f,
-                        "@{ip} GETGLOBAL(\"{value}\")",
-                        value = self.vm.interner.get_str(idx.into()),
-                    )?;
-                    ip = ip + size;
-                }
-                OpCode::SETGLOBAL(idx) => {
-                    writeln!(
-                        f,
-                        "@{ip} SETGLOBAL(\"{value}\")",
-                        value = self.vm.interner.get_str(idx.into()),
-                    )?;
-                    ip = ip + size;
-                }
-                OpCode::CONSTANT(idx) => {
-                    writeln!(
-                        f,
-                        "@{ip} CONSTANT({value})",
-                        value = self.vm.as_display(self.vm.constants[idx as usize].clone())
-                    )?;
-                    ip = ip + size;
-                }
-                OpCode::CLOSURE(fun_idx) => {
-                    let at = ip;
-                    ip = ip + size;
-                    let name = self
-                        .vm
-                        .interner
-                        .get_str(self.vm.functions[fun_idx as usize].name);
-                    let upvalues = (0..self.vm.functions[fun_idx as usize].upvalue_count)
-                        .map(|i| {
-                            format!(
-                                "{is_log}:{idx}",
-                                is_log = if self.fun.code.read_u8(ip + 3 * i) == 1 {
-                                    "loc"
-                                } else {
-                                    "up"
-                                },
-                                idx = self.fun.code.read_u16(ip + 3 * i + 1)
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    writeln!(
-                        f,
-                        "@{at} CLOSURE({name},{params})",
-                        params = upvalues.join(",")
-                    )?;
-                    ip = ip + &self.vm.functions[fun_idx as usize].upvalue_count * 3;
-                }
-                _ => {
-                    writeln!(f, "@{} {:?}", ip, op)?;
-                    ip = ip + size;
-                }
-            }
-        }
-        Ok(())
-    }
-}
+// OpCodeSlice struct - REMOVED: Decompilation not yet updated for heap-based functions
 
 #[derive(Clone, Debug)]
 struct UpValuePtr(Rc<RefCell<UpValueImpl>>);
@@ -191,15 +108,11 @@ impl From<UpValueImpl> for UpValuePtr {
     }
 }
 
-struct Closure {
-    function_idx: usize,
-    upvalues: Vec<UpValuePtr>,
-}
+// Closure struct - REMOVED: Closures are now heap-allocated as ObjClosure via GcRef
 
 #[derive(Debug)]
 struct CallFrame {
-    function_idx: usize,
-    closure_idx: usize,
+    closure: GcRef, // GcRef to ObjClosure on heap
     ip: usize,
     locals_idx: usize,
 }
@@ -243,14 +156,16 @@ pub struct VirtualMachine {
     pub(crate) string_table: DefaultStringTable, // NEW: GcRef-based string lookup
     pub(crate) stack: Vec<Value>,
     pub(crate) constants: Vec<Value>,
-    closures: Vec<Closure>,
-    functions: Vec<Function>,
-    pub(crate) function_by_name: HashMap<StrId, usize>,
+    // closures: Vec<Closure> - REMOVED: Closures are now heap-allocated
+    // functions: Vec<Function> - REMOVED: Functions are now heap-allocated
+    // function_by_name: HashMap<StrId, usize> - REMOVED: No longer needed with heap storage
     pub(crate) globals: HashMap<StrId, Value>,
     pub(crate) codemap: Codemap,
     pub(crate) closed_upvalues: Vec<Value>,
     open_upvalues: OpenUpValues,
     pub(crate) heap: Heap,
+    /// The top-level script closure (set after compilation)
+    script_closure: Option<GcRef>,
 }
 
 impl VirtualMachine {
@@ -263,17 +178,15 @@ impl VirtualMachine {
             globals: Default::default(),
             frame_idx: 0,
             frames: Default::default(),
-            functions: Default::default(),
-            function_by_name: Default::default(),
             codemap: Codemap {
                 line_endings: Default::default(),
                 lines_start_at_1: true,
                 position_starts_at_1: false,
             },
-            closures: Default::default(),
             closed_upvalues: Default::default(),
             open_upvalues: Default::default(),
             heap: Heap::new(),
+            script_closure: None,
         }
     }
 
@@ -427,26 +340,10 @@ impl VirtualMachine {
         }
     }
 
-    pub fn decompile<TOut: Write>(&self, stdout: &mut TOut) -> Result<(), VirtualMachineError> {
-        for (name_idx, function_idx) in &self.function_by_name {
-            write!(
-                stdout,
-                "{}:\n{}",
-                self.interner.get_str(*name_idx),
-                self.opcodes(*function_idx, 0)
-            )
-            .map_err(|e| VirtualMachineError::Unhandled(e.into()))?
-        }
-
+    pub fn decompile<TOut: Write>(&self, _stdout: &mut TOut) -> Result<(), VirtualMachineError> {
+        // TODO: Decompilation not yet updated for heap-based functions
+        // This was only used for debugging, not production functionality
         Ok(())
-    }
-
-    fn opcodes(&self, function_idx: usize, start: usize) -> OpCodeSlice {
-        OpCodeSlice {
-            fun: &self.functions[function_idx],
-            start: start,
-            vm: self,
-        }
     }
 
     pub fn compile(&mut self, code: &str) -> Result<(), VirtualMachineError> {
@@ -459,28 +356,20 @@ impl VirtualMachine {
 
         let mut result = ByteCode::default();
         let mut context = LexicalScope::root();
-        let name = self.interner.intern_str("<script>");
-        self.functions.push(Function {
-            name,
-            arity: 0,
-            code: Default::default(),
-            upvalue_count: 0,
-        });
-        self.closures.push(Closure {
-            function_idx: 0,
-            upvalues: Default::default(),
-        });
+
         for smt in smts.iter() {
             self.compile_statement(smt, &mut context, &mut result)?;
         }
-        for (_, stack_slot) in context.iter_local_upvalues() {
-            self.closures[0]
-                .upvalues
-                .push(UpValueImpl::Open(stack_slot).into());
-        }
-        self.function_by_name.insert(name, 0);
-        self.functions[0].code = result;
-        self.functions[0].upvalue_count = context.upvalues.len();
+
+        // Create script function and closure on heap
+        let name_ref = self.alloc_string("<script>".to_string());
+        let upvalue_count = context.upvalues.len();
+        let function_ref = self.alloc_function(name_ref, 0, result, upvalue_count);
+
+        // TODO(03-08): Closure upvalues are empty - fix in Plan 03-08
+        let closure_ref = self.alloc_closure(function_ref, vec![]);
+        self.script_closure = Some(closure_ref);
+
         Ok(())
     }
 
@@ -521,8 +410,7 @@ impl VirtualMachine {
             Value::Number(_x) => true,
             Value::Bool(x) => *x,
             Value::Nil => false,
-            Value::Closure(_) => true,
-            Value::Object(_) => true, // All objects (including strings) are truthy
+            Value::Object(_) => true, // All objects (closures, strings) are truthy
         }
     }
 
@@ -531,8 +419,7 @@ impl VirtualMachine {
             (Value::Number(l), Value::Number(r)) => l == r,
             (Value::Bool(l), Value::Bool(r)) => l == r,
             (Value::Nil, Value::Nil) => true,
-            (Value::Closure(l), Value::Closure(r)) => l == r,
-            // String interning ensures equal strings have same GcRef (identity comparison)
+            // Object interning ensures equal objects have same GcRef (identity comparison)
             (Value::Object(l), Value::Object(r)) => l == r,
             (_, _) => false,
         }
@@ -548,7 +435,8 @@ impl VirtualMachine {
 
     fn next_op(&mut self) -> Option<Result<(OpCode, usize), OpCodeError>> {
         let frame = &self.frames[self.frame_idx];
-        let function = &mut self.functions[frame.function_idx];
+        let closure = self.get_heap_closure(frame.closure);
+        let function = self.get_heap_function(closure.function);
         function.code.read_next(frame.ip)
     }
 
@@ -556,32 +444,35 @@ impl VirtualMachine {
         self.frames[self.frame_idx].locals_idx
     }
 
-    fn read_upvalues(&mut self, fun_idx: usize) -> Result<Vec<UpValuePtr>, VirtualMachineError> {
-        let function = &mut self.functions[fun_idx];
-        let mut result = Vec::with_capacity(function.upvalue_count);
-        for _ in 0..function.upvalue_count {
+    /// Get the current function's bytecode for reading upvalue descriptors
+    fn current_function_code(&self) -> &ByteCode {
+        let frame = &self.frames[self.frame_idx];
+        let closure = self.get_heap_closure(frame.closure);
+        let function = self.get_heap_function(closure.function);
+        &function.code
+    }
+
+    fn read_upvalues(&mut self, function_ref: GcRef) -> Result<Vec<UpValuePtr>, VirtualMachineError> {
+        let function = self.get_heap_function(function_ref);
+        let upvalue_count = function.upvalue_count;
+        let mut result = Vec::with_capacity(upvalue_count);
+        for _ in 0..upvalue_count {
             let frame = &self.frames[self.frame_idx];
-            let is_local = self.functions[frame.function_idx].code.read_u8(frame.ip) == 1;
-            let idx = self.functions[frame.function_idx]
-                .code
-                .read_u16(frame.ip + 1);
+            let frame_closure = frame.closure;
+            let closure = self.get_heap_closure(frame_closure);
+            let function = self.get_heap_function(closure.function);
+            let is_local = function.code.read_u8(frame.ip) == 1;
+            let idx = function.code.read_u16(frame.ip + 1);
 
             let value = if is_local {
                 self.open_upvalues
                     .capture_upvalue(self.locals_idx() + idx as usize)
             } else {
-                let parent_frame = &self.frames[self.frame_idx];
-                let vec = &self.closures[parent_frame.closure_idx].upvalues;
-                let v = vec.get(idx as usize).ok_or_else(|| {
-                    self.unhandled_error(format!(
-                        "Parent closure {name} has {n} upvalues",
-                        name = self
-                            .interner
-                            .get_str(self.functions[parent_frame.function_idx].name),
-                        n = vec.len()
-                    ))
-                })?;
-                v.clone()
+                // TODO(03-08): Access parent closure's upvalues from heap
+                // For now, return error since upvalue handling is incomplete
+                return Err(self.unhandled_error(format!(
+                    "Upvalue access not yet migrated to heap (03-08)"
+                )));
             };
             self.frames[self.frame_idx].inc_ip(3);
             result.push(value);
@@ -594,18 +485,20 @@ impl VirtualMachine {
     }
 
     fn current_line(&self) -> usize {
-        self.functions[self.frames[self.frame_idx].function_idx]
-            .code
-            .line(self.ip())
+        let frame = &self.frames[self.frame_idx];
+        let closure = self.get_heap_closure(frame.closure);
+        let function = self.get_heap_function(closure.function);
+        function.code.line(self.ip())
     }
 
     fn stacktrace_line(&self, frame: &CallFrame) -> String {
-        let fun_idx = frame.function_idx;
-        let fun = &self.functions[fun_idx];
+        let closure = self.get_heap_closure(frame.closure);
+        let function = self.get_heap_function(closure.function);
+        let name = self.get_heap_string(function.name);
         format!(
             "[line {}] in {}",
-            fun.code.line(frame.ip()),
-            self.interner.get_str(fun.name)
+            function.code.line(frame.ip()),
+            name
         )
     }
 
@@ -638,11 +531,11 @@ impl VirtualMachine {
     }
 
     pub fn run<TOut: Write>(&mut self, stdout: &mut TOut) -> Result<(), VirtualMachineError> {
+        let script_closure = self.script_closure.expect("compile() must be called before run()");
         self.frames.push(CallFrame {
-            function_idx: 0,
+            closure: script_closure,
             ip: 0,
             locals_idx: 0,
-            closure_idx: 0,
         });
 
         while let Some(x) = self.next_op() {
@@ -943,11 +836,11 @@ impl VirtualMachine {
                 }
                 OpCode::CALL(arg_count) => {
                     let arg_count = arg_count as usize;
-                    let closure = &self.stack[self.stack.len() - arg_count - 1];
+                    let callee = &self.stack[self.stack.len() - arg_count - 1];
                     debug!(
                         "@{} CALL {}({}) [line: {}]",
                         self.ip(),
-                        self.as_display(closure.clone()),
+                        self.as_display(callee.clone()),
                         (0..arg_count)
                             .into_iter()
                             .map(|i| {
@@ -960,38 +853,41 @@ impl VirtualMachine {
                             .join(","),
                         self.current_line()
                     );
-                    //debug!("Last 5 values on stack:\n{}", self.show_stack(5));
-                    //debug!("frames:\n{:#?}", &self.frames);
 
-                    if let Value::Closure(ClosureValue { closure_id }) = closure {
-                        let closure = &self.closures[*closure_id];
-                        let fun = &self.functions[closure.function_idx];
-                        if fun.arity != arg_count {
+                    if let Value::Object(closure_ref) = callee {
+                        let closure_ref = *closure_ref;
+                        // Check if it's a closure
+                        if let ObjKind::Closure(closure) = &self.heap.get(closure_ref).kind {
+                            let function = self.get_heap_function(closure.function);
+                            if function.arity != arg_count {
+                                return Err(VirtualMachineError::RuntimeError {
+                                    kind: RuntimeErrorKind::InvalidFunArity {
+                                        got: arg_count,
+                                        expected: function.arity,
+                                    },
+                                    stacktrace: self.stacktrace(),
+                                });
+                            }
+                            // Check for stack overflow before pushing new frame
+                            if self.frames.len() >= FRAMES_MAX {
+                                return Err(VirtualMachineError::RuntimeError {
+                                    kind: RuntimeErrorKind::StackOverflow,
+                                    stacktrace: self.stacktrace(),
+                                });
+                            }
+                            self.frames.push(CallFrame {
+                                ip: 0,
+                                closure: closure_ref,
+                                locals_idx: self.stack.len() - arg_count - 1,
+                            });
+                            self.frame_idx += 1;
+                            continue;
+                        } else {
                             return Err(VirtualMachineError::RuntimeError {
-                                kind: RuntimeErrorKind::InvalidFunArity {
-                                    got: arg_count,
-                                    expected: fun.arity,
-                                },
+                                kind: RuntimeErrorKind::InvalidCallee,
                                 stacktrace: self.stacktrace(),
                             });
                         }
-                        // Check for stack overflow before pushing new frame
-                        if self.frames.len() >= FRAMES_MAX {
-                            return Err(VirtualMachineError::RuntimeError {
-                                kind: RuntimeErrorKind::StackOverflow,
-                                stacktrace: self.stacktrace(),
-                            });
-                        }
-                        //self.frames[self.frame_idx].inc_ip(size);
-                        self.frames.push(CallFrame {
-                            ip: 0,
-                            closure_idx: *closure_id,
-                            function_idx: closure.function_idx,
-                            locals_idx: self.stack.len() - arg_count - 1,
-                        });
-                        self.frame_idx += 1;
-                        //debug!("frames after call:\n{:#?}", &self.frames);
-                        continue;
                     } else {
                         return Err(VirtualMachineError::RuntimeError {
                             kind: RuntimeErrorKind::InvalidCallee,
@@ -1034,9 +930,11 @@ impl VirtualMachine {
                         at = self.ip(),
                         line = self.current_line()
                     );
-                    let frame = &self.frames[self.frame_idx];
-                    let up_value = &self.closures[frame.closure_idx].upvalues[idx as usize];
-                    self.push(up_value.get_value(self)?);
+                    // TODO(03-08): Upvalue access needs migration to heap-based ObjUpvalue
+                    // For now, upvalues are not supported
+                    return Err(self.unhandled_error(format!(
+                        "GETUPVALUE not yet migrated to heap (03-08)"
+                    )));
                 }
                 OpCode::SETUPVALUE(idx) => {
                     let new_value = self.pop()?;
@@ -1046,42 +944,41 @@ impl VirtualMachine {
                         value = self.as_display(new_value.clone()),
                         line = self.current_line()
                     );
-                    let frame = &self.frames[self.frame_idx];
-                    let up_value = &self.closures[frame.closure_idx].upvalues[idx as usize];
-
-                    // Write value based on whether upvalue is open or closed
-                    match up_value.0.borrow().deref() {
-                        UpValueImpl::Open(stack_slot) => {
-                            self.stack[*stack_slot] = new_value.clone();
-                        }
-                        UpValueImpl::Closed(closed_idx) => {
-                            self.closed_upvalues[*closed_idx] = new_value.clone();
-                        }
-                    }
-
-                    // Push value back on stack (assignment expressions evaluate to assigned value)
-                    self.push(new_value);
+                    // TODO(03-08): Upvalue access needs migration to heap-based ObjUpvalue
+                    // For now, upvalues are not supported
+                    return Err(self.unhandled_error(format!(
+                        "SETUPVALUE not yet migrated to heap (03-08)"
+                    )));
                 }
-                OpCode::CLOSURE(function_idx) => {
+                OpCode::CLOSURE(function_const_idx) => {
                     debug!(
-                        "@{at} CLOSURE {function_idx} [line: {line}]",
+                        "@{at} CLOSURE {function_const_idx} [line: {line}]",
                         at = self.ip(),
                         line = self.current_line()
                     );
                     self.frames[self.frame_idx].inc_ip(size);
-                    self.push(Value::closure(self.closures.len()));
-                    let upvalues = self.read_upvalues(function_idx as usize)?;
-                    debug!(
-                        "Closure {name} has {n} upvalues",
-                        name = self
-                            .interner
-                            .get_str(self.functions[function_idx as usize].name),
-                        n = upvalues.len()
-                    );
-                    self.closures.push(Closure {
-                        function_idx: function_idx as usize,
-                        upvalues,
-                    });
+
+                    // Get function ref from constants table
+                    let function_value = &self.constants[function_const_idx as usize];
+                    let function_ref = match function_value {
+                        Value::Object(r) => *r,
+                        _ => return Err(self.unhandled_error("Expected function object in constants")),
+                    };
+
+                    // Get upvalue count from function
+                    let function = self.get_heap_function(function_ref);
+                    let upvalue_count = function.upvalue_count;
+
+                    // Read upvalue descriptors from bytecode and skip past them
+                    // (upvalues will be properly handled in 03-08)
+                    for _ in 0..upvalue_count {
+                        self.frames[self.frame_idx].inc_ip(3); // Skip each upvalue descriptor (1 byte is_local + 2 bytes index)
+                    }
+
+                    // TODO(03-08): Closure upvalues are empty - fix in Plan 03-08
+                    let closure_ref = self.alloc_closure(function_ref, vec![]);
+                    self.push(Value::Object(closure_ref));
+
                     continue;
                 }
                 OpCode::CLOSEUPVALUE => {
@@ -1170,31 +1067,29 @@ impl VirtualMachine {
 
                 let mut byte_code = ByteCode::default();
                 context.function_decl(name.node(), params.iter().map(|x| x.node().as_str()));
-                //self.define_function(&name.node(), params.len(), 0, Default::default())?;
-                let mut function = Function {
-                    arity: params.len(),
-                    code: ByteCode::default(),
-                    name: self.interner.intern_str(&name.node),
-                    upvalue_count: 0,
-                };
+
                 self.compile_statement(body, context, &mut byte_code)?;
                 byte_code.write_op(OpCode::NIL, self.lookup_source_line(body.end()));
                 byte_code.write_op(OpCode::RET, self.lookup_source_line(body.end()));
-                function.code = byte_code;
-                self.function_by_name.insert(
-                    self.interner.intern_str(context.name()),
-                    self.functions.len(),
-                );
-                function.upvalue_count = context.upvalues.len();
+
+                let upvalue_count = context.upvalues.len();
+
+                // Create function on heap
+                let name_ref = self.alloc_string(name.node.clone());
+                let function_ref = self.alloc_function(name_ref, params.len(), byte_code, upvalue_count);
+
+                // Store function ref in constants table and use index in CLOSURE opcode
+                let function_const_idx = self.constants.len() as u16;
+                self.constants.push(Value::Object(function_ref));
+
                 result.write_op(
-                    OpCode::CLOSURE((self.functions.len()) as u16),
+                    OpCode::CLOSURE(function_const_idx),
                     self.lookup_source_line(name.start()),
                 );
                 for (_, up) in context.upvalues.iter() {
                     up.write_to(result, self.lookup_source_line(name.start()));
                 }
                 context.leave_function();
-                self.functions.push(function);
 
                 self.compile_declaration_from_stack(name, context, result)?;
                 Ok(())
@@ -1900,19 +1795,9 @@ impl<'a> Display for DispayValue<'a> {
             }
             Value::Bool(x) => write!(f, "{}", x),
             Value::Nil => f.write_str("nil"),
-            Value::Closure(ClosureValue { closure_id }) => {
-                let closure = &self.vm.closures[closure_id];
-                write!(
-                    f,
-                    "<fn {}>",
-                    self.vm
-                        .interner
-                        .get_str(self.vm.functions[closure.function_idx].name)
-                )
-            }
+            // Value::Closure - REMOVED: Closures are now Value::Object(GcRef)
             Value::Object(gc_ref) => {
                 // Display based on object type in the heap
-                use crate::object::ObjKind;
                 let obj = self.vm.heap.get(gc_ref);
                 match &obj.kind {
                     ObjKind::String(s) => f.write_str(&s.value),

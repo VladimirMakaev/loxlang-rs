@@ -12,15 +12,11 @@ pub enum Value {
     Bool(bool),
     Nil,
     // String(StrId) - REMOVED: Strings are now heap-allocated as Value::Object(GcRef)
-    Closure(ClosureValue),
+    // Closure(ClosureValue) - REMOVED: Closures are now heap-allocated as Value::Object(GcRef)
     Object(GcRef),
 }
 
 impl Value {
-    pub fn closure(closure_id: usize) -> Value {
-        Value::Closure(ClosureValue { closure_id })
-    }
-
     pub fn object(gc_ref: GcRef) -> Value {
         Value::Object(gc_ref)
     }
@@ -48,10 +44,7 @@ impl Value {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct ClosureValue {
-    pub closure_id: usize,
-}
+// ClosureValue struct - REMOVED: Closures are now heap-allocated as Value::Object(GcRef)
 
 #[derive(Debug)]
 pub enum UpValueImpl {
