@@ -268,7 +268,7 @@ pub fn verify_lox_file(code: &str, path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::parse_expectations;
 
     #[test]
     fn test_parse_stdout_expectations() {
