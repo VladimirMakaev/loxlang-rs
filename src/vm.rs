@@ -2817,6 +2817,9 @@ impl<'a> Display for DisplayError<'a> {
                         ParseError::SuperWithoutSuperclass { span } => {
                             Self::report_error_with_span(self.code, self.codemap, f, span, error)?
                         }
+                        ParseError::InheritFromSelf { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
                         ParseError::UnexpectedEof { last_position } => {
                             Self::report_error_at_end(self.codemap, f, *last_position, "Expect expression.")?
                         }

@@ -109,7 +109,7 @@ fn verify_code(code: &str) -> anyhow::Result<()> {
             codemap: &vm.codemap,
         }
         .to_string();
-        assert_eq!(error_expectations.join("\n"), error_line);
+        assert_eq!(error_expectations.join("\n"), error_line.trim());
         // Return early - don't try to run() after compile error
         return Ok(());
     }
