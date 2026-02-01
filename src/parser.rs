@@ -265,7 +265,14 @@ pub struct FunDeclaration {
 #[derive(Debug)]
 pub struct ClassDeclaration {
     pub(crate) name: AstIdent,
-    // Methods added in Phase 5
+    pub(crate) methods: Vec<MethodDeclaration>,
+}
+
+#[derive(Debug)]
+pub struct MethodDeclaration {
+    pub(crate) name: AstIdent,
+    pub(crate) params: Vec<AstIdent>,
+    pub(crate) body: Box<AstStmt>,
 }
 
 pub struct Parser<'source> {
@@ -478,10 +485,9 @@ impl<'source> Parser<'source> {
 
         self.consume(TokenType::LeftBrace)?;
 
-        // Skip method parsing (Phase 5) - just consume until RightBrace
+        let mut methods = Vec::new();
         while !self.check_token(TokenType::RightBrace)? {
-            // Consume any tokens inside the class body
-            self.consume_next()?;
+            methods.push(self.method_declaration()?);
         }
 
         let right_brace = self.consume(TokenType::RightBrace)?;
@@ -490,9 +496,62 @@ impl<'source> Parser<'source> {
         Ok(
             Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration {
                 name,
+                methods,
             }))
             .ast(span),
         )
+    }
+
+    fn method_declaration(&mut self) -> Result<MethodDeclaration, StmtError> {
+        let name_token = self.consume(TokenType::IDENTIFIER)?;
+        let name = name_token.slice(self.code).to_owned().ast(name_token.span());
+
+        self.consume(TokenType::LeftParen)?;
+
+        let mut params = Vec::new();
+        if !self.check_token(TokenType::RightParen)? {
+            loop {
+                if let Spanned {
+                    node: Expression::Identier(x),
+                    span,
+                } = self.identifier_contant()?
+                {
+                    if params.len() == u8::MAX as usize {
+                        return Err(ParseError::MaxFunDeclarationParameters { span: span }.into());
+                    }
+
+                    params.push(x.ast(span));
+                } else {
+                    unreachable!()
+                }
+
+                if !self.check_token(TokenType::RightParen)? {
+                    self.consume_or_else(TokenType::Comma, |t| ParseError::UnexpectedToken {
+                        span: t.span(),
+                        expectation: "Expect ')' after parameters.".to_owned(),
+                    })?;
+                } else {
+                    break;
+                }
+            }
+        }
+        self.consume(TokenType::RightParen)?;
+
+        if !self.check_token(TokenType::LeftBrace)? {
+            return Err(ParseError::UnexpectedToken {
+                span: self.consume_next()?.span(),
+                expectation: "Expect '{' before method body.".to_owned(),
+            }
+            .into());
+        }
+
+        let body = self.block_statement()?;
+
+        Ok(MethodDeclaration {
+            name,
+            params,
+            body: Box::new(body),
+        })
     }
 
     fn var_declaration(&mut self) -> StmtResult {
