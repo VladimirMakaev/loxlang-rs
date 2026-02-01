@@ -497,7 +497,12 @@ impl<'source> Parser<'source> {
         // Parse optional superclass
         let superclass = if self.check_token(TokenType::LESS)? {
             self.consume(TokenType::LESS)?;
-            let super_name = self.consume(TokenType::IDENTIFIER)?;
+            let super_name = self.consume_or_else(TokenType::IDENTIFIER, |t| {
+                ParseError::UnexpectedToken {
+                    span: t.span(),
+                    expectation: "Expect superclass name.".to_owned(),
+                }
+            })?;
             let super_ident = super_name.slice(self.code).to_owned().ast(super_name.span());
 
             // Check for self-inheritance
