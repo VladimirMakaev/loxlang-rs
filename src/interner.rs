@@ -1,18 +1,58 @@
-use std::{
-    collections::hash_map::DefaultHasher,
-    fmt::Debug,
-    hash::{BuildHasher, BuildHasherDefault},
-};
+use std::hash::{BuildHasher, BuildHasherDefault};
+use std::collections::hash_map::DefaultHasher;
+use hashbrown::HashMap;
+use crate::gc::GcRef;
 
-#[derive(PartialEq, Hash, Eq, Clone, Copy, Default)]
-pub struct StrId {
-    idx: u16,
+pub type DefaultStringTable = StringTable<BuildHasherDefault<DefaultHasher>>;
+
+/// String intern table - maps hash to GcRef for deduplication
+/// Strings themselves are stored in Heap as ObjString
+pub struct StringTable<H: BuildHasher> {
+    table: HashMap<u64, GcRef>,
+    hasher: H,
 }
 
-impl Debug for StrId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "str:{}", self.idx)
+impl<H: BuildHasher> StringTable<H> {
+    pub fn new(hasher: H) -> Self {
+        StringTable {
+            table: HashMap::new(),
+            hasher,
+        }
     }
+
+    pub fn hash_string(&self, s: &str) -> u64 {
+        self.hasher.hash_one(s)
+    }
+
+    /// Look up existing interned string by hash
+    pub fn get(&self, hash: u64) -> Option<GcRef> {
+        self.table.get(&hash).copied()
+    }
+
+    /// Insert new string reference
+    pub fn insert(&mut self, hash: u64, gc_ref: GcRef) {
+        self.table.insert(hash, gc_ref);
+    }
+
+    /// Remove entries for unmarked strings (called during GC sweep)
+    pub fn remove_unmarked<F>(&mut self, is_marked: F)
+    where
+        F: Fn(GcRef) -> bool,
+    {
+        self.table.retain(|_, r| is_marked(*r));
+    }
+
+    /// Get the underlying hasher for external use
+    pub fn hasher(&self) -> &H {
+        &self.hasher
+    }
+}
+
+// Keep StrId for backward compatibility during migration
+// This can be removed after full migration
+#[derive(PartialEq, Hash, Eq, Clone, Copy, Default, Debug)]
+pub struct StrId {
+    pub(crate) idx: u16,
 }
 
 impl StrId {
@@ -20,8 +60,6 @@ impl StrId {
         self.idx
     }
 }
-
-pub type DefaultInterner = Interner<BuildHasherDefault<DefaultHasher>>;
 
 impl From<usize> for StrId {
     fn from(value: usize) -> Self {
@@ -40,6 +78,9 @@ impl From<i32> for StrId {
         (value as u16).into()
     }
 }
+
+// Keep the old Interner for backward compatibility during migration
+pub type DefaultInterner = Interner<BuildHasherDefault<DefaultHasher>>;
 
 pub struct Interner<H: BuildHasher> {
     all_strings: Vec<String>,
