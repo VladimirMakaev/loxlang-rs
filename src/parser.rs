@@ -830,12 +830,20 @@ impl<'source> Parser<'source> {
     }
 
     fn assignment(&mut self, left: AstExpression) -> ExprResult {
+        // Get the '=' token span for error reporting (token is peeked but not consumed yet)
+        let equal_span = self
+            .lexer
+            .peek()
+            .and_then(|r| r.as_ref().ok())
+            .map(|t| t.span())
+            .unwrap_or(left.span);
+
         let lvalue = match left {
             Spanned {
                 node: Expression::Identier(name),
                 span,
             } => Ok(Expression::Identier(name).ast(span)),
-            _ => Err(ParseError::InvalidAssignmentTarget { span: left.span }),
+            _ => Err(ParseError::InvalidAssignmentTarget { span: equal_span }),
         }?;
         self.consume(TokenType::EQUAL)?;
         let rvalue = self.expression()?;
@@ -1025,6 +1033,7 @@ impl<'source> Parser<'source> {
             TokenType::AND => (None, Some(Box::new(Self::logical_and)), Precedence::AND),
             TokenType::OR => (None, Some(Box::new(Self::logical_or)), Precedence::AND),
             TokenType::FUN | TokenType::Comma | TokenType::RETURN => (None, None, Precedence::NONE),
+            TokenType::Dot => (None, None, Precedence::NONE),
             _ => panic!("Not implemented token: {:?}", token),
         }
     }
