@@ -8,7 +8,7 @@ use crate::lexer::{Lexer, LexerError, PosIdx, Token, TokenType};
 #[derive(Error, Debug)]
 #[error("{errors:?}")]
 pub struct StmtError {
-    errors: Vec<ParseError>,
+    pub errors: Vec<ParseError>,
 }
 
 impl From<ParseError> for StmtError {
@@ -71,6 +71,8 @@ pub enum ParseError {
     TooManyUpvalues { span: Span },
     #[error("Loop body too large.")]
     LoopBodyTooLarge { span: Span },
+    #[error("Can't read local variable in its own initializer.")]
+    UninitializedLocal { span: Span },
 }
 
 impl Into<Vec<ParseError>> for ParseError {
@@ -1077,6 +1079,9 @@ impl<'source> Parser<'source> {
 
         self.consume(TokenType::LeftParen)?;
 
+        let mut collected_errors: Vec<ParseError> = Vec::new();
+
+        // Parse initializer
         let init_stmt = if self.check_token(TokenType::VAR)? {
             Some(Box::new(self.var_declaration()?))
         } else {
@@ -1084,20 +1089,79 @@ impl<'source> Parser<'source> {
                 self.consume(TokenType::Semicolon)?;
                 None
             } else {
-                let expression = self.expression()?;
-                self.consume(TokenType::Semicolon)?;
-                let span = Span::new(expression.start(), expression.end());
-                Some(Box::new(Stmt::Expression(expression).ast(span)))
+                match self.expression() {
+                    Ok(expression) => {
+                        self.consume_or_else(TokenType::Semicolon, |t| ParseError::UnexpectedToken {
+                            span: t.span(),
+                            expectation: "Expect ';' after expression.".to_owned(),
+                        })?;
+                        let span = Span::new(expression.start(), expression.end());
+                        Some(Box::new(Stmt::Expression(expression).ast(span)))
+                    }
+                    Err(err) => {
+                        collected_errors.push(err);
+                        // Skip until we find right paren (not semicolon) to match clox behavior
+                        while !self.check_token(TokenType::RightParen)? {
+                            if self.lexer.next().is_none() {
+                                break;
+                            }
+                        }
+                        // Report "Expect ';' after expression" at the )
+                        if let Some(Ok(t)) = self.lexer.peek() {
+                            collected_errors.push(ParseError::UnexpectedToken {
+                                span: t.span(),
+                                expectation: "Expect ';' after expression.".to_owned(),
+                            });
+                        }
+                        None
+                    }
+                }
             }
         };
 
-        let condition = if let Some(_) = self.match_token(TokenType::Semicolon)? {
-            None
+        // Parse condition - only if no errors yet from initializer
+        let condition = if collected_errors.is_empty() {
+            if let Some(_) = self.match_token(TokenType::Semicolon)? {
+                None
+            } else if self.check_token(TokenType::RightParen)? {
+                // No condition and no semicolon - already at end
+                None
+            } else {
+                match self.expression() {
+                    Ok(expression) => {
+                        self.consume_or_else(TokenType::Semicolon, |t| ParseError::UnexpectedToken {
+                            span: t.span(),
+                            expectation: "Expect ';' after expression.".to_owned(),
+                        })?;
+                        Some(Box::new(expression))
+                    }
+                    Err(err) => {
+                        collected_errors.push(err);
+                        // Skip until we find right paren
+                        while !self.check_token(TokenType::RightParen)? {
+                            if self.lexer.next().is_none() {
+                                break;
+                            }
+                        }
+                        // Report "Expect ';' after expression" at the )
+                        if let Some(Ok(t)) = self.lexer.peek() {
+                            collected_errors.push(ParseError::UnexpectedToken {
+                                span: t.span(),
+                                expectation: "Expect ';' after expression.".to_owned(),
+                            });
+                        }
+                        None
+                    }
+                }
+            }
         } else {
-            let expression = Box::new(self.expression()?);
-            self.consume(TokenType::Semicolon)?;
-            Some(expression)
+            None
         };
+
+        // If we have collected errors, return them now
+        if !collected_errors.is_empty() {
+            return Err(StmtError { errors: collected_errors }.into());
+        }
 
         let increment_stmt = if self.check_token(TokenType::RightParen)? {
             None
