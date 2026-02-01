@@ -525,12 +525,13 @@ impl VirtualMachine {
                             let result = self.interner.intern_string(contatenate);
                             self.push(Value::String(result));
                         }
-                        (left, right) => {
-                            return Err(self.unhandled_error(format!(
-                                "ADD: unsupported types of operands: left: {}, right: {}",
-                                self.as_display(left),
-                                self.as_display(right)
-                            )));
+                        (_, _) => {
+                            return Err(VirtualMachineError::RuntimeError {
+                                kind: RuntimeErrorKind::Unexpected {
+                                    error: anyhow::Error::msg("Operands must be two numbers or two strings."),
+                                },
+                                stacktrace: self.stacktrace(),
+                            });
                         }
                     }
                 }
