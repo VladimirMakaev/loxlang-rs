@@ -1,4 +1,6 @@
 use crate::gc::GcRef;
+// StrId import kept for globals HashMap keys (identifier interning still uses StrId)
+#[allow(unused_imports)]
 use crate::interner::StrId;
 
 #[derive(Clone, strum::EnumDiscriminants, strum::EnumTryAs)]
@@ -9,7 +11,7 @@ pub enum Value {
     Number(f64),
     Bool(bool),
     Nil,
-    String(StrId),
+    // String(StrId) - REMOVED: Strings are now heap-allocated as Value::Object(GcRef)
     Closure(ClosureValue),
     Object(GcRef),
 }
@@ -28,6 +30,16 @@ impl Value {
     }
 
     pub fn as_object(&self) -> Option<GcRef> {
+        if let Value::Object(r) = self {
+            Some(*r)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the GcRef if this is an Object variant.
+    /// Caller must verify the object kind is ObjKind::String using heap.get(r).kind.
+    pub fn as_string_ref(&self) -> Option<GcRef> {
         if let Value::Object(r) = self {
             Some(*r)
         } else {
