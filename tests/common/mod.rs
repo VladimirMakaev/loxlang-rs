@@ -66,6 +66,10 @@ pub fn parse_expectations(code: &str) -> TestExpectations {
     let explicit_line_error_regex =
         Regex::new(r"//\s*\[line (\d+)\]\s*Error at '([^']+)':\s*(.+)").unwrap();
 
+    // Compile error at end: // [line N] Error at end: message
+    let at_end_error_regex =
+        Regex::new(r"//\s*\[line (\d+)\]\s*Error at end:\s*(.+)").unwrap();
+
     // clox-specific error (treat same as explicit): // [c line N] Error at 'token': message
     let clox_error_regex =
         Regex::new(r"//\s*\[c line (\d+)\]\s*Error at '([^']+)':\s*(.+)").unwrap();
@@ -107,6 +111,18 @@ pub fn parse_expectations(code: &str) -> TestExpectations {
                 message,
             });
             continue; // Don't also match the current-line pattern
+        }
+
+        // Check for "Error at end" compile error: [line N] Error at end: message
+        if let Some(captures) = at_end_error_regex.captures(&line) {
+            let error_line: usize = captures.get(1).unwrap().as_str().parse().unwrap_or(line_no);
+            let message = captures.get(2).unwrap().as_str().to_string();
+            expectations.compile_errors.push(CompileError {
+                line: error_line,
+                token: "end".to_string(),
+                message,
+            });
+            continue;
         }
 
         // Check for clox-specific error: [c line N] Error at 'token': message
@@ -279,10 +295,19 @@ fn verify_lox_file_inner(code: &str, path: &Path) -> Result<(), String> {
 
             // Check if expected compile errors match
             for expected in &expectations.compile_errors {
-                let expected_pattern = format!(
-                    "[line {}] Error at '{}': {}",
-                    expected.line, expected.token, expected.message
-                );
+                let expected_pattern = if expected.token == "end" {
+                    // "Error at end:" format (no quotes around end)
+                    format!(
+                        "[line {}] Error at end: {}",
+                        expected.line, expected.message
+                    )
+                } else {
+                    // Normal "Error at 'token':" format
+                    format!(
+                        "[line {}] Error at '{}': {}",
+                        expected.line, expected.token, expected.message
+                    )
+                };
                 if !actual_error.contains(&expected_pattern) {
                     return Err(format!(
                         "Compile error mismatch in {:?}\n\nExpected error containing:\n  {}\n\nActual error:\n  {}",
