@@ -14,8 +14,10 @@ use crate::vm::DisplayError;
 
 mod byte_code;
 mod codemap;
+mod gc;
 mod interner;
 mod lexer;
+mod object;
 mod parser;
 #[cfg(test)]
 mod tests;
