@@ -407,9 +407,18 @@ impl VirtualMachine {
 
         let mut result = ByteCode::default();
         let mut context = LexicalScope::root();
+        let mut compile_errors: Vec<ParseError> = Vec::new();
 
         for smt in smts.iter() {
-            self.compile_statement(smt, &mut context, &mut result)?;
+            if let Err(VirtualMachineError::CompileError(errors)) =
+                self.compile_statement(smt, &mut context, &mut result)
+            {
+                compile_errors.extend(errors);
+            }
+        }
+
+        if !compile_errors.is_empty() {
+            return Err(VirtualMachineError::CompileError(compile_errors));
         }
 
         // Create script function and closure on heap
@@ -2743,7 +2752,7 @@ impl<'a> DisplayError<'a> {
         span: &Span,
         error: impl Display,
     ) -> std::fmt::Result {
-        write!(
+        writeln!(
             f,
             "{}Error at '{}': {}",
             {
