@@ -16,7 +16,7 @@ use crate::{
     codemap::Codemap,
     gc::{GcRef, Heap},
     interner::{DefaultInterner, DefaultStringTable, Interner, StringTable, StrId},
-    object::{Obj, ObjClosure, ObjFunction, ObjKind, ObjUpvalue, UpvalueLocation},
+    object::{Obj, ObjBoundMethod, ObjClosure, ObjFunction, ObjKind, ObjUpvalue, UpvalueLocation},
     parser::{
         AstExpression, AstIdent, AstStmt, ClassDeclaration, Expression, ForStmt, FunDeclaration, IfStmt,
         LogicalExpression, ParseError, Parser, Span, StmtDeclaration, WhileStmt,
@@ -1269,7 +1269,7 @@ impl VirtualMachine {
                 }
                 self.compile_declaration_from_stack(ident, context, result)
             }
-            crate::parser::Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration { name })) => {
+            crate::parser::Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration { name, .. })) => {
                 // Emit CLASS opcode with name constant index
                 let name_ref = self.alloc_string(name.node.clone());
                 let name_const_idx = self.constants.len() as u16;
@@ -2051,6 +2051,25 @@ impl<'a> Display for DispayValue<'a> {
                             }
                         } else {
                             write!(f, "<instance>")
+                        }
+                    }
+                    ObjKind::BoundMethod(bm) => {
+                        // Print bound method same as closure: "<fn methodName>"
+                        let method_obj = self.vm.heap.get(bm.method);
+                        if let ObjKind::Closure(c) = &method_obj.kind {
+                            let func = self.vm.heap.get(c.function);
+                            if let ObjKind::Function(func_obj) = &func.kind {
+                                let name_obj = self.vm.heap.get(func_obj.name);
+                                if let ObjKind::String(name_str) = &name_obj.kind {
+                                    write!(f, "<fn {}>", name_str.value)
+                                } else {
+                                    write!(f, "<fn>")
+                                }
+                            } else {
+                                write!(f, "<fn>")
+                            }
+                        } else {
+                            write!(f, "<fn>")
                         }
                     }
                 }

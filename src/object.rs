@@ -23,6 +23,7 @@ pub enum ObjKind {
     Upvalue(ObjUpvalue),
     Class(ObjClass),
     Instance(ObjInstance),
+    BoundMethod(ObjBoundMethod),
 }
 
 /// A string object with its value and pre-computed hash.
@@ -50,9 +51,16 @@ pub struct ObjUpvalue {
     pub location: UpvalueLocation,
 }
 
-/// A class object containing the class name.
+/// A class object containing the class name and methods.
 pub struct ObjClass {
     pub name: GcRef, // Points to ObjString
+    pub methods: HashMap<GcRef, GcRef>, // Method name GcRef -> closure GcRef
+}
+
+/// A bound method object binding a closure to an instance receiver.
+pub struct ObjBoundMethod {
+    pub receiver: Value,  // The instance
+    pub method: GcRef,    // Points to ObjClosure
 }
 
 /// An instance object with a reference to its class and field storage.
@@ -76,10 +84,14 @@ impl Obj {
                 ObjKind::Closure(c) => c.upvalues.len() * std::mem::size_of::<GcRef>(),
                 ObjKind::Function(f) => f.code.size(),
                 ObjKind::Upvalue(_) => 0,
-                ObjKind::Class(_) => 0, // Name is separate object
+                ObjKind::Class(c) => {
+                    // Methods HashMap size (method closures are separate objects)
+                    c.methods.len() * (std::mem::size_of::<GcRef>() * 2)
+                }
                 ObjKind::Instance(i) => {
                     i.fields.len() * (std::mem::size_of::<GcRef>() + std::mem::size_of::<Value>())
                 }
+                ObjKind::BoundMethod(_) => 0, // Method is separate object
             }
     }
 
@@ -124,7 +136,10 @@ impl Obj {
     pub fn class(name: GcRef) -> Self {
         Obj {
             is_marked: false,
-            kind: ObjKind::Class(ObjClass { name }),
+            kind: ObjKind::Class(ObjClass {
+                name,
+                methods: HashMap::new(),
+            }),
         }
     }
 
@@ -136,6 +151,14 @@ impl Obj {
                 klass,
                 fields: HashMap::new(),
             }),
+        }
+    }
+
+    /// Creates a new bound method object.
+    pub fn bound_method(receiver: Value, method: GcRef) -> Self {
+        Obj {
+            is_marked: false,
+            kind: ObjKind::BoundMethod(ObjBoundMethod { receiver, method }),
         }
     }
 }
@@ -159,7 +182,12 @@ impl ObjKind {
                     vec![]
                 }
             }
-            ObjKind::Class(c) => vec![c.name],
+            ObjKind::Class(c) => {
+                // Trace name ref + all method closure refs
+                let mut refs = vec![c.name];
+                refs.extend(c.methods.values().copied());
+                refs
+            }
             ObjKind::Instance(i) => {
                 // Trace klass ref + all field name refs + all field value object refs
                 let mut refs = vec![i.klass];
@@ -168,6 +196,14 @@ impl ObjKind {
                     if let Value::Object(r) = value {
                         refs.push(*r);
                     }
+                }
+                refs
+            }
+            ObjKind::BoundMethod(bm) => {
+                // Trace method closure ref + receiver if it's an object
+                let mut refs = vec![bm.method];
+                if let Value::Object(r) = &bm.receiver {
+                    refs.push(*r);
                 }
                 refs
             }
