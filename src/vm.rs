@@ -1994,4 +1994,32 @@ mod tests {
             Some((0, UpvalueRef::Local(0)))
         )
     }
+
+    #[test]
+    fn test_gc_triggers() {
+        use super::VirtualMachine;
+
+        let mut vm = VirtualMachine::new();
+        // Set low threshold to force GC
+        let initial_threshold = 1024;
+        vm.heap.next_gc = initial_threshold;
+
+        // Allocate many strings to trigger GC
+        for i in 0..100 {
+            let s = format!("string_{}", i);
+            vm.alloc_string(s);
+        }
+
+        // Verify GC ran by checking threshold was updated
+        // After GC, next_gc should be > initial_threshold (doubled)
+        assert!(
+            vm.heap.next_gc > initial_threshold,
+            "GC should have run and updated threshold. Expected > {}, got {}",
+            initial_threshold,
+            vm.heap.next_gc
+        );
+
+        // Also verify bytes_allocated is reasonable
+        assert!(vm.heap.bytes_allocated > 0, "Should have allocated bytes");
+    }
 }
