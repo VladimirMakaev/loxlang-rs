@@ -2178,6 +2178,46 @@ impl VirtualMachine {
                     panic!("'this' not found in method scope");
                 }
             }
+            Expression::Super { method } => {
+                let line = self.lookup_source_line(expr.start());
+
+                // Check compile-time errors
+                if !context.in_class() {
+                    return Err(VirtualMachineError::CompileError(vec![
+                        ParseError::SuperOutsideClass { span: expr.span },
+                    ]));
+                }
+                if !context.has_superclass() {
+                    return Err(VirtualMachineError::CompileError(vec![
+                        ParseError::SuperWithoutSuperclass { span: expr.span },
+                    ]));
+                }
+
+                // Load 'this' (receiver) onto stack
+                if let Some(offset) = context.resolve_local("this") {
+                    result.write_op(OpCode::GETLOCAL(offset as u16), line);
+                } else if let Some((idx, _)) = context.resolve_upvalue("this") {
+                    result.write_op(OpCode::GETUPVALUE(idx as u16), line);
+                } else {
+                    panic!("'this' not found in method scope");
+                }
+
+                // Load 'super' (superclass) onto stack
+                if let Some(offset) = context.resolve_local("super") {
+                    result.write_op(OpCode::GETLOCAL(offset as u16), line);
+                } else if let Some((idx, _)) = context.resolve_upvalue("super") {
+                    result.write_op(OpCode::GETUPVALUE(idx as u16), line);
+                } else {
+                    panic!("'super' not found in scope");
+                }
+
+                // Emit GET_SUPER with method name constant
+                let method_name_ref = self.alloc_string(method.clone());
+                let method_const_idx = self.constants.len() as u16;
+                self.constants.push(Value::Object(method_name_ref));
+
+                result.write_op(OpCode::GET_SUPER(method_const_idx), line);
+            }
         }
 
         Ok(())

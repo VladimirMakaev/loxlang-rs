@@ -216,6 +216,7 @@ pub enum Expression {
         value: Box<AstExpression>,
     },
     This,
+    Super { method: String },  // super.method - stores the method name
 }
 
 #[derive(Debug, strum::Display, strum::EnumTryAs)]
@@ -1129,6 +1130,29 @@ impl<'source> Parser<'source> {
         Ok(Expression::This.ast(token.span()))
     }
 
+    fn super_expression(&mut self) -> ExprResult {
+        let super_token = self.consume(TokenType::SUPER)?;
+
+        // Require '.' after super
+        self.consume_or_else(TokenType::Dot, |t| ParseError::UnexpectedToken {
+            span: t.span(),
+            expectation: "Expect '.' after 'super'.".to_owned(),
+        })?;
+
+        // Require method name
+        let method_token = self.consume_or_else(TokenType::IDENTIFIER, |t| {
+            ParseError::UnexpectedToken {
+                span: t.span(),
+                expectation: "Expect superclass method name.".to_owned(),
+            }
+        })?;
+
+        let method = method_token.slice(self.code).to_string();
+        let span = Span::new(super_token.start(), method_token.end());
+
+        Ok(Expression::Super { method }.ast(span))
+    }
+
     fn precedence(
         token: TokenType,
     ) -> (
@@ -1198,6 +1222,7 @@ impl<'source> Parser<'source> {
             TokenType::Dot => (None, Some(Box::new(Self::dot)), Precedence::HIGHEST),
             TokenType::CLASS => (None, None, Precedence::NONE),
             TokenType::THIS => (Some(Box::new(Self::this_expression)), None, Precedence::NONE),
+            TokenType::SUPER => (Some(Box::new(Self::super_expression)), None, Precedence::NONE),
             _ => panic!("Not implemented token: {:?}", token),
         }
     }
@@ -1293,6 +1318,7 @@ mod tests {
             Expression::GetProperty { .. } => todo!(),
             Expression::SetProperty { .. } => todo!(),
             Expression::This => unimplemented!(),
+            Expression::Super { .. } => unimplemented!(),
         }
     }
 
