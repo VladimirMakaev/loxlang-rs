@@ -1539,13 +1539,135 @@ impl VirtualMachine {
                         }
                     }
                 }
-                OpCode::GET_SUPER(_) => {
-                    // Placeholder: Super method lookup in Phase 6-05
-                    todo!("GET_SUPER opcode not yet implemented")
+                OpCode::GET_SUPER(name_const_idx) => {
+                    // Stack: [..., receiver (this), superclass]
+                    let name_value = self.constants[name_const_idx as usize].clone();
+                    let name_ref = match name_value {
+                        Value::Object(r) => r,
+                        _ => return Err(self.unhandled_error("Expected string constant for method name")),
+                    };
+
+                    let superclass_value = self.pop()?;
+                    let receiver = self.pop()?;
+
+                    let superclass_ref = match superclass_value {
+                        Value::Object(r) => r,
+                        _ => return Err(self.unhandled_error("Expected superclass")),
+                    };
+
+                    // Look up method in superclass (NOT in instance's class)
+                    let method_ref = {
+                        let obj = self.heap.get(superclass_ref);
+                        if let ObjKind::Class(class) = &obj.kind {
+                            class.methods.get(&name_ref).copied()
+                        } else {
+                            None
+                        }
+                    };
+
+                    match method_ref {
+                        Some(closure_ref) => {
+                            // Create bound method with receiver
+                            let bound_ref = self.alloc_bound_method(receiver, closure_ref);
+                            self.push(Value::Object(bound_ref));
+                        }
+                        None => {
+                            let name = self.get_heap_string(name_ref).to_string();
+                            let frame = &self.frames[self.frame_idx];
+                            let closure = self.get_heap_closure(frame.closure);
+                            let function = self.get_heap_function(closure.function);
+                            let line = function.code.line(frame.ip());
+                            return Err(VirtualMachineError::RuntimeError {
+                                kind: RuntimeErrorKind::Unexpected {
+                                    error: anyhow::anyhow!("Undefined property '{}'.", name),
+                                },
+                                stacktrace: format!("[line {}]", line),
+                            });
+                        }
+                    }
                 }
-                OpCode::SUPER_INVOKE(_, _) => {
-                    // Placeholder: Super invocation in Phase 6-06
-                    todo!("SUPER_INVOKE opcode not yet implemented")
+                OpCode::SUPER_INVOKE(name_const_idx, arg_count) => {
+                    // Stack: [receiver, arg1, ..., argN, superclass]
+                    let arg_count = arg_count as usize;
+                    let name_value = self.constants[name_const_idx as usize].clone();
+                    let name_ref = match name_value {
+                        Value::Object(r) => r,
+                        _ => return Err(self.unhandled_error("Expected string constant")),
+                    };
+
+                    let superclass_value = self.pop()?;
+                    let superclass_ref = match superclass_value {
+                        Value::Object(r) => r,
+                        _ => return Err(self.unhandled_error("Expected superclass")),
+                    };
+
+                    // Look up method in superclass
+                    let method_ref = {
+                        let obj = self.heap.get(superclass_ref);
+                        if let ObjKind::Class(class) = &obj.kind {
+                            class.methods.get(&name_ref).copied()
+                        } else {
+                            None
+                        }
+                    };
+
+                    match method_ref {
+                        Some(closure_ref) => {
+                            // Get the function from closure for arity check
+                            let func_ref = self.get_heap_closure(closure_ref).function;
+                            let arity = self.get_heap_function(func_ref).arity;
+
+                            if arg_count != arity {
+                                let frame = &self.frames[self.frame_idx];
+                                let closure = self.get_heap_closure(frame.closure);
+                                let function = self.get_heap_function(closure.function);
+                                let line = function.code.line(frame.ip());
+                                return Err(VirtualMachineError::RuntimeError {
+                                    kind: RuntimeErrorKind::InvalidFunArity {
+                                        got: arg_count,
+                                        expected: arity,
+                                    },
+                                    stacktrace: format!("[line {}]", line),
+                                });
+                            }
+
+                            // Check frame limit
+                            if self.frames.len() >= FRAMES_MAX {
+                                return Err(VirtualMachineError::RuntimeError {
+                                    kind: RuntimeErrorKind::StackOverflow,
+                                    stacktrace: self.stacktrace(),
+                                });
+                            }
+
+                            // Advance IP before pushing frame (matches INVOKE pattern)
+                            self.frames[self.frame_idx].inc_ip(size);
+
+                            // Push new call frame
+                            // Receiver is at stack position: len - arg_count - 1
+                            let locals_idx = self.stack.len() - arg_count - 1;
+                            self.frames.push(CallFrame {
+                                closure: closure_ref,
+                                ip: 0,
+                                locals_idx,
+                            });
+                            self.frame_idx += 1;
+
+                            continue;
+                        }
+                        None => {
+                            let name = self.get_heap_string(name_ref).to_string();
+                            let frame = &self.frames[self.frame_idx];
+                            let closure = self.get_heap_closure(frame.closure);
+                            let function = self.get_heap_function(closure.function);
+                            let line = function.code.line(frame.ip());
+                            return Err(VirtualMachineError::RuntimeError {
+                                kind: RuntimeErrorKind::Unexpected {
+                                    error: anyhow::anyhow!("Undefined property '{}'.", name),
+                                },
+                                stacktrace: format!("[line {}]", line),
+                            });
+                        }
+                    }
                 }
             }
             self.frames[self.frame_idx].inc_ip(size);
@@ -1665,23 +1787,75 @@ impl VirtualMachine {
                 // Define class as variable (same as functions)
                 self.compile_declaration_from_stack(name, context, result)?;
 
+                // Handle inheritance if superclass exists
+                if let Some(ref super_ident) = superclass {
+                    // Load superclass onto stack
+                    if context.is_toplevel() {
+                        let super_name_idx = self.interner.intern_str(super_ident.node());
+                        result.write_op(
+                            OpCode::GETGLOBAL(super_name_idx),
+                            self.lookup_source_line(super_ident.start()),
+                        );
+                    } else if let Some(offset) = context.resolve_local(super_ident.node()) {
+                        result.write_op(
+                            OpCode::GETLOCAL(offset as u16),
+                            self.lookup_source_line(super_ident.start()),
+                        );
+                    } else if let Some((idx, _)) = context.resolve_upvalue(super_ident.node()) {
+                        result.write_op(
+                            OpCode::GETUPVALUE(idx as u16),
+                            self.lookup_source_line(super_ident.start()),
+                        );
+                    } else {
+                        let super_name_idx = self.interner.intern_str(super_ident.node());
+                        result.write_op(
+                            OpCode::GETGLOBAL(super_name_idx),
+                            self.lookup_source_line(super_ident.start()),
+                        );
+                    }
+
+                    // Load subclass onto stack
+                    if context.is_toplevel() {
+                        let class_name_idx = self.interner.intern_str(name.node());
+                        result.write_op(
+                            OpCode::GETGLOBAL(class_name_idx),
+                            self.lookup_source_line(name.start()),
+                        );
+                    } else if let Some(offset) = context.resolve_local(name.node()) {
+                        result.write_op(
+                            OpCode::GETLOCAL(offset as u16),
+                            self.lookup_source_line(name.start()),
+                        );
+                    }
+
+                    // Emit INHERIT opcode
+                    result.write_op(
+                        OpCode::INHERIT,
+                        self.lookup_source_line(super_ident.start()),
+                    );
+
+                    // Enter block for "super" local (superclass is now on stack top after INHERIT)
+                    context.enter_block();
+                    context.new_local("super");
+                }
+
                 // Compile each method
                 for method in methods {
                     // Load class back onto stack for METHOD opcode
-                    if context.is_toplevel() {
+                    // Check if class is a local or global (need to handle the case where
+                    // we're inside a synthetic block for "super" but the class is global)
+                    if let Some(offset) = context.resolve_local(name.node()) {
+                        result.write_op(
+                            OpCode::GETLOCAL(offset as u16),
+                            self.lookup_source_line(method.name.start()),
+                        );
+                    } else {
+                        // Class is a global variable
                         let class_name_idx = self.interner.intern_str(name.node());
                         result.write_op(
                             OpCode::GETGLOBAL(class_name_idx),
                             self.lookup_source_line(method.name.start()),
                         );
-                    } else {
-                        // Class is a local variable
-                        if let Some(offset) = context.resolve_local(name.node()) {
-                            result.write_op(
-                                OpCode::GETLOCAL(offset as u16),
-                                self.lookup_source_line(method.name.start()),
-                            );
-                        }
                     }
 
                     // Compile the method body
@@ -1740,6 +1914,18 @@ impl VirtualMachine {
                         OpCode::METHOD(method_name_const_idx),
                         self.lookup_source_line(method.name.start()),
                     );
+                }
+
+                // Close "super" local if we had a superclass
+                if superclass.is_some() {
+                    // Check if any method captured "super"
+                    let (_, captured) = context.iter_locals_in_block_rev().next().unwrap_or(("", false));
+                    if captured {
+                        result.write_op(OpCode::CLOSEUPVALUE, self.lookup_source_line(name.start()));
+                    } else {
+                        result.write_op(OpCode::POP, self.lookup_source_line(name.start()));
+                    }
+                    context.leave_block();
                 }
 
                 Ok(())
@@ -2180,16 +2366,18 @@ impl VirtualMachine {
             }
             Expression::Super { method } => {
                 let line = self.lookup_source_line(expr.start());
+                // Create span just for "super" keyword (5 characters)
+                let super_span = Span::new(expr.start(), expr.start() + 5);
 
                 // Check compile-time errors
                 if !context.in_class() {
                     return Err(VirtualMachineError::CompileError(vec![
-                        ParseError::SuperOutsideClass { span: expr.span },
+                        ParseError::SuperOutsideClass { span: super_span },
                     ]));
                 }
                 if !context.has_superclass() {
                     return Err(VirtualMachineError::CompileError(vec![
-                        ParseError::SuperWithoutSuperclass { span: expr.span },
+                        ParseError::SuperWithoutSuperclass { span: super_span },
                     ]));
                 }
 
@@ -2612,6 +2800,12 @@ impl<'a> Display for DisplayError<'a> {
                             Self::report_error_with_span(self.code, self.codemap, f, span, error)?
                         }
                         ParseError::InitializerReturnValue { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::SuperOutsideClass { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::SuperWithoutSuperclass { span } => {
                             Self::report_error_with_span(self.code, self.codemap, f, span, error)?
                         }
                         ParseError::UnexpectedEof { last_position } => {
