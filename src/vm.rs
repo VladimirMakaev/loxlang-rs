@@ -1788,14 +1788,27 @@ impl VirtualMachine {
                 );
             }
             Expression::This => {
-                // TODO: Implement This expression compilation in Plan 05-04
-                // For now, emit an error
-                return Err(VirtualMachineError::CompileError(vec![
-                    ParseError::UnexpectedToken {
-                        span: expr.span,
-                        expectation: "Can't use 'this' outside of a class.".to_owned(),
-                    },
-                ]));
+                let line = self.lookup_source_line(expr.start());
+
+                // Check if inside a class
+                if context.enclosing_class.is_none() {
+                    return Err(VirtualMachineError::CompileError(vec![
+                        ParseError::UnexpectedToken {
+                            span: expr.span,
+                            expectation: "Can't use 'this' outside of a class.".to_owned(),
+                        },
+                    ]));
+                }
+
+                // 'this' is always at slot 0 in method scope or via upvalue
+                if let Some(offset) = context.resolve_local("this") {
+                    result.write_op(OpCode::GETLOCAL(offset as u16), line);
+                } else if let Some((idx, _)) = context.resolve_upvalue("this") {
+                    result.write_op(OpCode::GETUPVALUE(idx as u16), line);
+                } else {
+                    // Should not happen if enclosing_class is set correctly
+                    panic!("'this' not found in method scope");
+                }
             }
         }
 
