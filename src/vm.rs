@@ -1038,6 +1038,12 @@ impl VirtualMachine {
                     let class_ref = self.alloc_class(name_ref);
                     self.push(Value::Object(class_ref));
                 }
+                OpCode::GET_PROPERTY(_) => {
+                    todo!("GET_PROPERTY VM implementation")
+                }
+                OpCode::SET_PROPERTY(_) => {
+                    todo!("SET_PROPERTY VM implementation")
+                }
             }
             self.frames[self.frame_idx].inc_ip(size);
         }
