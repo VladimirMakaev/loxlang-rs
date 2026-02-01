@@ -716,6 +716,18 @@ impl<'source> Parser<'source> {
         }
     }
 
+    fn dot(&mut self, left: AstExpression) -> ExprResult {
+        self.consume(TokenType::Dot)?;
+        let name_token = self.consume(TokenType::IDENTIFIER)?;
+        let name = name_token.span().slice(self.code).to_string();
+        let span = Span::new(left.start(), name_token.end());
+        Ok(Expression::GetProperty {
+            object: Box::new(left),
+            name,
+        }
+        .ast(span))
+    }
+
     fn unary(&mut self) -> ExprResult {
         let operator = self.consume_next()?;
         let expression = self.parse_by_precedence(Precedence::UNARY)?;
@@ -875,7 +887,6 @@ impl<'source> Parser<'source> {
     }
 
     fn assignment(&mut self, left: AstExpression) -> ExprResult {
-        // Get the '=' token span for error reporting (token is peeked but not consumed yet)
         let equal_span = self
             .lexer
             .peek()
@@ -883,21 +894,36 @@ impl<'source> Parser<'source> {
             .map(|t| t.span())
             .unwrap_or(left.span);
 
-        let lvalue = match left {
+        self.consume(TokenType::EQUAL)?;
+        let rvalue = self.expression()?;
+
+        match left {
             Spanned {
                 node: Expression::Identier(name),
                 span,
-            } => Ok(Expression::Identier(name).ast(span)),
+            } => {
+                let lvalue = Expression::Identier(name).ast(span);
+                let result_span = Span::new(lvalue.start(), rvalue.end());
+                Ok(Expression::Assignment {
+                    lvalue: Box::new(lvalue),
+                    rvalue: Box::new(rvalue),
+                }
+                .ast(result_span))
+            }
+            Spanned {
+                node: Expression::GetProperty { object, name },
+                span: _,
+            } => {
+                let result_span = Span::new(object.start(), rvalue.end());
+                Ok(Expression::SetProperty {
+                    object,
+                    name,
+                    value: Box::new(rvalue),
+                }
+                .ast(result_span))
+            }
             _ => Err(ParseError::InvalidAssignmentTarget { span: equal_span }),
-        }?;
-        self.consume(TokenType::EQUAL)?;
-        let rvalue = self.expression()?;
-        let span = Span::new(lvalue.start(), rvalue.end());
-        Ok(Expression::Assignment {
-            lvalue: Box::new(lvalue),
-            rvalue: Box::new(rvalue),
         }
-        .ast(span))
     }
 
     fn block_statement(&mut self) -> StmtResult {
@@ -1078,7 +1104,7 @@ impl<'source> Parser<'source> {
             TokenType::AND => (None, Some(Box::new(Self::logical_and)), Precedence::AND),
             TokenType::OR => (None, Some(Box::new(Self::logical_or)), Precedence::AND),
             TokenType::FUN | TokenType::Comma | TokenType::RETURN => (None, None, Precedence::NONE),
-            TokenType::Dot => (None, None, Precedence::NONE),
+            TokenType::Dot => (None, Some(Box::new(Self::dot)), Precedence::HIGHEST),
             TokenType::CLASS => (None, None, Precedence::NONE),
             _ => panic!("Not implemented token: {:?}", token),
         }
@@ -1201,6 +1227,113 @@ mod tests {
             Expression::UnaryNegation { expr } => -1.0 * eval(&expr),
             Expression::Grouping { expr } => eval(&expr),
             _ => unimplemented!(),
+        }
+    }
+
+    #[test]
+    fn test_get_property_simple() {
+        let expr = parse_expression("obj.field").unwrap();
+        match expr.node {
+            Expression::GetProperty { object, name } => {
+                assert_eq!(name, "field");
+                match object.node {
+                    Expression::Identier(obj_name) => assert_eq!(obj_name, "obj"),
+                    _ => panic!("Expected identifier for object"),
+                }
+            }
+            _ => panic!("Expected GetProperty expression"),
+        }
+    }
+
+    #[test]
+    fn test_get_property_chained() {
+        let expr = parse_expression("obj.a.b.c").unwrap();
+        match expr.node {
+            Expression::GetProperty { object, name } => {
+                assert_eq!(name, "c");
+                match object.node {
+                    Expression::GetProperty { object: inner, name } => {
+                        assert_eq!(name, "b");
+                        match inner.node {
+                            Expression::GetProperty { object: innermost, name } => {
+                                assert_eq!(name, "a");
+                                match innermost.node {
+                                    Expression::Identier(obj_name) => assert_eq!(obj_name, "obj"),
+                                    _ => panic!("Expected identifier"),
+                                }
+                            }
+                            _ => panic!("Expected GetProperty"),
+                        }
+                    }
+                    _ => panic!("Expected GetProperty"),
+                }
+            }
+            _ => panic!("Expected GetProperty expression"),
+        }
+    }
+
+    #[test]
+    fn test_set_property_simple() {
+        let expr = parse_expression("obj.field = value").unwrap();
+        match expr.node {
+            Expression::SetProperty { object, name, value } => {
+                assert_eq!(name, "field");
+                match object.node {
+                    Expression::Identier(obj_name) => assert_eq!(obj_name, "obj"),
+                    _ => panic!("Expected identifier for object"),
+                }
+                match value.node {
+                    Expression::Identier(val_name) => assert_eq!(val_name, "value"),
+                    _ => panic!("Expected identifier for value"),
+                }
+            }
+            _ => panic!("Expected SetProperty expression"),
+        }
+    }
+
+    #[test]
+    fn test_set_property_chained() {
+        let expr = parse_expression("obj.a.b = value").unwrap();
+        match expr.node {
+            Expression::SetProperty { object, name, value } => {
+                assert_eq!(name, "b");
+                match object.node {
+                    Expression::GetProperty { object: inner, name } => {
+                        assert_eq!(name, "a");
+                        match inner.node {
+                            Expression::Identier(obj_name) => assert_eq!(obj_name, "obj"),
+                            _ => panic!("Expected identifier"),
+                        }
+                    }
+                    _ => panic!("Expected GetProperty for object"),
+                }
+                match value.node {
+                    Expression::Identier(val_name) => assert_eq!(val_name, "value"),
+                    _ => panic!("Expected identifier for value"),
+                }
+            }
+            _ => panic!("Expected SetProperty expression"),
+        }
+    }
+
+    #[test]
+    fn test_property_with_call() {
+        let expr = parse_expression("obj.method()").unwrap();
+        match expr.node {
+            Expression::Call { calee, arguments } => {
+                assert!(arguments.is_empty());
+                match calee.node {
+                    Expression::GetProperty { object, name } => {
+                        assert_eq!(name, "method");
+                        match object.node {
+                            Expression::Identier(obj_name) => assert_eq!(obj_name, "obj"),
+                            _ => panic!("Expected identifier for object"),
+                        }
+                    }
+                    _ => panic!("Expected GetProperty for calee"),
+                }
+            }
+            _ => panic!("Expected Call expression"),
         }
     }
 }
