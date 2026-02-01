@@ -1273,6 +1273,10 @@ impl VirtualMachine {
                         return Err(self.unhandled_error("Expected class object"));
                     }
                 }
+                OpCode::INVOKE(_name_idx, _arg_count) => {
+                    // TODO: Implement in Task 3
+                    unimplemented!("INVOKE opcode not yet implemented");
+                }
             }
             self.frames[self.frame_idx].inc_ip(size);
         }
