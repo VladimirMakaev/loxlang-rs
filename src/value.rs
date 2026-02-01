@@ -1,3 +1,4 @@
+use crate::gc::GcRef;
 use crate::interner::StrId;
 
 #[derive(Clone, strum::EnumDiscriminants, strum::EnumTryAs)]
@@ -10,11 +11,28 @@ pub enum Value {
     Nil,
     String(StrId),
     Closure(ClosureValue),
+    Object(GcRef),
 }
 
 impl Value {
     pub fn closure(closure_id: usize) -> Value {
-        return Value::Closure(ClosureValue { closure_id });
+        Value::Closure(ClosureValue { closure_id })
+    }
+
+    pub fn object(gc_ref: GcRef) -> Value {
+        Value::Object(gc_ref)
+    }
+
+    pub fn is_object(&self) -> bool {
+        matches!(self, Value::Object(_))
+    }
+
+    pub fn as_object(&self) -> Option<GcRef> {
+        if let Value::Object(r) = self {
+            Some(*r)
+        } else {
+            None
+        }
     }
 }
 

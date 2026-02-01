@@ -17,6 +17,7 @@ use tracing::debug;
 use crate::{
     byte_code::{ByteCode, JumpOffset, OpCode, OpCodeError, OpCodeTypes},
     codemap::Codemap,
+    gc::Heap,
     interner::{DefaultInterner, Interner, StrId},
     parser::{
         AstExpression, AstIdent, AstStmt, Expression, ForStmt, FunDeclaration, IfStmt,
@@ -242,6 +243,7 @@ pub struct VirtualMachine {
     pub(crate) codemap: Codemap,
     pub(crate) closed_upvalues: Vec<Value>,
     open_upvalues: OpenUpValues,
+    pub(crate) heap: Heap,
 }
 
 impl VirtualMachine {
@@ -263,6 +265,7 @@ impl VirtualMachine {
             closures: Default::default(),
             closed_upvalues: Default::default(),
             open_upvalues: Default::default(),
+            heap: Heap::new(),
         }
     }
 
@@ -362,6 +365,7 @@ impl VirtualMachine {
             Value::Nil => false,
             Value::String(_) => true,
             Value::Closure(_) => true,
+            Value::Object(_) => true,
         }
     }
 
@@ -1726,6 +1730,37 @@ impl<'a> Display for DispayValue<'a> {
                         .interner
                         .get_str(self.vm.functions[closure.function_idx].name)
                 )
+            }
+            Value::Object(gc_ref) => {
+                // Display based on object type in the heap
+                use crate::object::ObjKind;
+                let obj = self.vm.heap.get(gc_ref);
+                match &obj.kind {
+                    ObjKind::String(s) => write!(f, "{}", s.value),
+                    ObjKind::Closure(c) => {
+                        // Get the function name from the closure's function
+                        let func = self.vm.heap.get(c.function);
+                        if let ObjKind::Function(func_obj) = &func.kind {
+                            let name_obj = self.vm.heap.get(func_obj.name);
+                            if let ObjKind::String(name_str) = &name_obj.kind {
+                                write!(f, "<fn {}>", name_str.value)
+                            } else {
+                                write!(f, "<fn>")
+                            }
+                        } else {
+                            write!(f, "<fn>")
+                        }
+                    }
+                    ObjKind::Function(func) => {
+                        let name_obj = self.vm.heap.get(func.name);
+                        if let ObjKind::String(name_str) = &name_obj.kind {
+                            write!(f, "<fn {}>", name_str.value)
+                        } else {
+                            write!(f, "<fn>")
+                        }
+                    }
+                    ObjKind::Upvalue(_) => write!(f, "<upvalue>"),
+                }
             }
         }
     }
