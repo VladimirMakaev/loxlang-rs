@@ -1561,9 +1561,9 @@ pub struct DispayValue<'a> {
 }
 
 pub struct DisplayError<'a> {
-    pub(crate) err: &'a VirtualMachineError,
-    pub(crate) code: &'a str,
-    pub(crate) codemap: &'a Codemap,
+    pub err: &'a VirtualMachineError,
+    pub code: &'a str,
+    pub codemap: &'a Codemap,
 }
 
 impl<'a> DisplayError<'a> {
@@ -1587,6 +1587,16 @@ impl<'a> DisplayError<'a> {
             span.slice(code),
             error
         )
+    }
+
+    fn report_error_at_end(
+        codemap: &Codemap,
+        f: &mut Formatter<'_>,
+        last_position: usize,
+        error: impl Display,
+    ) -> std::fmt::Result {
+        let line = codemap.line_at(last_position).unwrap_or(1);
+        write!(f, "[line {}] Error at end: {}", line, error)
     }
 }
 
@@ -1619,6 +1629,9 @@ impl<'a> Display for DisplayError<'a> {
                         }
                         ParseError::MaxFunDeclarationParameters { span } => {
                             Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::UnexpectedEof { last_position } => {
+                            Self::report_error_at_end(self.codemap, f, *last_position, "Expect expression.")?
                         }
                         _ => writeln!(f, "{}", error)?,
                     }

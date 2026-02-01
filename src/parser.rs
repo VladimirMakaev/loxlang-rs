@@ -27,8 +27,8 @@ pub enum ParseError {
     #[error("{expectation}")]
     UnexpectedToken { span: Span, expectation: String },
 
-    #[error("Unexpected end of file")]
-    UnexpectedEof,
+    #[error("Unexpected end of file.")]
+    UnexpectedEof { last_position: usize },
     #[error("Number literal can't be converted to number")]
     InvalidNumberLiteral {
         #[from]
@@ -248,6 +248,7 @@ pub struct Parser<'source> {
     code: &'source str,
     lexer: Peekable<Lexer<'source>>,
     errors: Vec<ParseError>,
+    last_position: usize,
 }
 
 type ExprResult = Result<AstExpression, ParseError>;
@@ -299,6 +300,7 @@ impl<'source> Parser<'source> {
             code,
             lexer: Lexer::new(code).peekable(),
             errors: Default::default(),
+            last_position: 0,
         }
     }
 
@@ -342,13 +344,19 @@ impl<'source> Parser<'source> {
         match self.lexer.peek() {
             Some(Ok(t)) => {
                 if t.ty() == token_type {
-                    Ok(self.lexer.next().unwrap()?)
+                    let token = self.lexer.next().unwrap()?;
+                    self.last_position = token.end();
+                    Ok(token)
                 } else {
                     Err(f(t))
                 }
             }
-            Some(Err(_)) => Ok(self.lexer.next().unwrap()?),
-            None => Err(ParseError::UnexpectedEof),
+            Some(Err(_)) => {
+                let token = self.lexer.next().unwrap()?;
+                self.last_position = token.end();
+                Ok(token)
+            }
+            None => Err(ParseError::UnexpectedEof { last_position: self.last_position }),
         }
     }
 
@@ -569,9 +577,11 @@ impl<'source> Parser<'source> {
 
     fn consume_next(&mut self) -> Result<Token, ParseError> {
         if let Some(t) = self.lexer.next() {
-            Ok(t?)
+            let token = t?;
+            self.last_position = token.end();
+            Ok(token)
         } else {
-            Err(ParseError::UnexpectedEof)
+            Err(ParseError::UnexpectedEof { last_position: self.last_position })
         }
     }
 
@@ -603,7 +613,7 @@ impl<'source> Parser<'source> {
                 return Err(ParseError::ExpectedExpression { span: token.span() });
             }
         } else {
-            return Err(ParseError::UnexpectedEof);
+            return Err(ParseError::UnexpectedEof { last_position: self.last_position });
         }
     }
 
