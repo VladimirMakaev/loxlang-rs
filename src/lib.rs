@@ -5,8 +5,10 @@
 
 pub mod byte_code;
 pub mod codemap;
+pub mod gc;
 pub mod interner;
 pub mod lexer;
+pub mod object;
 pub mod parser;
 pub mod value;
 pub mod vm;
