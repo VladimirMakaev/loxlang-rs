@@ -279,6 +279,7 @@ impl VirtualMachine {
     /// Allocate a string on the heap, deduplicating via string_table.
     /// Returns a GcRef to the string object.
     pub fn alloc_string(&mut self, s: String) -> GcRef {
+        self.maybe_collect();
         let hash = self.string_table.hash_string(&s);
 
         // Check intern table for existing string
@@ -299,18 +300,21 @@ impl VirtualMachine {
 
     /// Allocate a function on the heap.
     pub fn alloc_function(&mut self, name: GcRef, arity: usize, code: ByteCode, upvalue_count: usize) -> GcRef {
+        self.maybe_collect();
         let obj = Obj::function(name, arity, code, upvalue_count);
         self.heap.alloc(obj)
     }
 
     /// Allocate a closure on the heap.
     pub fn alloc_closure(&mut self, function: GcRef, upvalues: Vec<GcRef>) -> GcRef {
+        self.maybe_collect();
         let obj = Obj::closure(function, upvalues);
         self.heap.alloc(obj)
     }
 
     /// Allocate an upvalue on the heap.
     pub fn alloc_upvalue(&mut self, location: UpvalueLocation) -> GcRef {
+        self.maybe_collect();
         let obj = Obj::upvalue(location);
         self.heap.alloc(obj)
     }
@@ -339,6 +343,82 @@ impl VirtualMachine {
             c
         } else {
             panic!("Expected closure object")
+        }
+    }
+
+    // =========================================================================
+    // Garbage Collection
+    // =========================================================================
+
+    /// Mark all root objects (reachable without traversal)
+    fn mark_roots(&mut self) {
+        // 1. Mark stack values
+        let stack_values: Vec<Value> = self.stack.clone();
+        for value in stack_values {
+            self.mark_value(value);
+        }
+
+        // 2. Mark global variable values
+        let global_values: Vec<Value> = self.globals.values().cloned().collect();
+        for value in global_values {
+            self.mark_value(value);
+        }
+
+        // 3. Mark constants (they may contain object references)
+        let constants: Vec<Value> = self.constants.clone();
+        for value in constants {
+            self.mark_value(value);
+        }
+
+        // 4. Mark closed upvalues
+        let closed: Vec<Value> = self.closed_upvalues.clone();
+        for value in closed {
+            self.mark_value(value);
+        }
+    }
+
+    /// Mark a value if it's an object reference
+    fn mark_value(&mut self, value: Value) {
+        if let Value::Object(r) = value {
+            self.heap.mark_object(r);
+        }
+    }
+
+    /// Run garbage collection
+    pub fn collect_garbage(&mut self) {
+        #[cfg(feature = "debug_gc")]
+        let before = self.heap.bytes_allocated;
+
+        #[cfg(feature = "debug_gc")]
+        eprintln!("-- gc begin ({} bytes)", before);
+
+        // Reset for new collection cycle
+        self.heap.reset_gray_stack();
+
+        // Mark phase
+        self.mark_roots();
+        self.heap.trace_references();
+
+        // Clean string table (weak references)
+        self.string_table.remove_unmarked(|r| self.heap.is_marked(r));
+
+        // Sweep phase
+        self.heap.sweep();
+
+        // Update threshold
+        self.heap.update_threshold();
+
+        #[cfg(feature = "debug_gc")]
+        {
+            let after = self.heap.bytes_allocated;
+            eprintln!("-- gc end ({} bytes, freed {})", after, before.saturating_sub(after));
+        }
+    }
+
+    /// Check if GC should run and trigger if needed
+    fn maybe_collect(&mut self) {
+        if self.heap.bytes_allocated > self.heap.next_gc {
+            self.collect_garbage();
         }
     }
 
