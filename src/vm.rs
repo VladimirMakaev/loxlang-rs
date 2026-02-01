@@ -4,6 +4,7 @@ use std::{
     hash::BuildHasherDefault,
     io::Write,
     mem,
+    time::Instant,
 };
 
 use hashbrown::HashMap;
@@ -16,7 +17,7 @@ use crate::{
     codemap::Codemap,
     gc::{GcRef, Heap},
     interner::{DefaultInterner, DefaultStringTable, Interner, StringTable, StrId},
-    object::{Obj, ObjBoundMethod, ObjClosure, ObjFunction, ObjKind, ObjNative, ObjUpvalue, UpvalueLocation},
+    object::{Obj, ObjBoundMethod, ObjClosure, ObjFunction, ObjKind, ObjUpvalue, UpvalueLocation},
     parser::{
         AstExpression, AstIdent, AstStmt, ClassDeclaration, Expression, ForStmt, FunDeclaration, IfStmt,
         LogicalExpression, ParseError, Parser, Span, StmtDeclaration, WhileStmt,
@@ -146,11 +147,13 @@ pub struct VirtualMachine {
     pub(crate) heap: Heap,
     /// The top-level script closure (set after compilation)
     script_closure: Option<GcRef>,
+    /// Monotonic time for clock() native function
+    clock_start: Instant,
 }
 
 impl VirtualMachine {
     pub fn new() -> Self {
-        Self {
+        let mut vm = Self {
             constants: Default::default(),
             stack: Default::default(),
             interner: Interner::new(BuildHasherDefault::<DefaultHasher>::default()),
@@ -166,7 +169,18 @@ impl VirtualMachine {
             open_upvalues: Default::default(),
             heap: Heap::new(),
             script_closure: None,
-        }
+            clock_start: Instant::now(),
+        };
+        vm.define_native("clock", 0);
+        vm
+    }
+
+    /// Register a native function in the global scope.
+    fn define_native(&mut self, name: &'static str, arity: usize) {
+        let name_id = self.interner.intern_str(name);
+        let native_obj = Obj::native(name, arity);
+        let native_ref = self.heap.alloc(native_obj);
+        self.globals.insert(name_id, Value::Object(native_ref));
     }
 
     // =========================================================================
@@ -1006,6 +1020,38 @@ impl VirtualMachine {
                                 });
                                 self.frame_idx += 1;
                                 continue;
+                            }
+                            ObjKind::Native(native) => {
+                                // Extract native info before any mutable operations
+                                let native_arity = native.arity;
+                                let native_name = native.name;
+
+                                // Validate arity
+                                if arg_count != native_arity {
+                                    return Err(VirtualMachineError::RuntimeError {
+                                        kind: RuntimeErrorKind::InvalidFunArity {
+                                            got: arg_count,
+                                            expected: native_arity,
+                                        },
+                                        stacktrace: self.stacktrace(),
+                                    });
+                                }
+
+                                // Execute native function
+                                let result = match native_name {
+                                    "clock" => Value::Number(self.clock_start.elapsed().as_secs_f64()),
+                                    _ => panic!("Unknown native function: {}", native_name),
+                                };
+
+                                // Pop args + callee, push result
+                                let pop_count = arg_count + 1;
+                                for _ in 0..pop_count {
+                                    self.stack.pop();
+                                }
+                                self.stack.push(result);
+
+                                // Advance IP (no call frame for natives)
+                                self.frames[self.frame_idx].inc_ip(size);
                             }
                             _ => {
                                 return Err(VirtualMachineError::RuntimeError {
