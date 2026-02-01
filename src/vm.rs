@@ -37,6 +37,14 @@ pub enum RuntimeErrorKind {
     Unexpected { error: anyhow::Error },
 }
 
+/// Returns the clox-formatted error message for operand type errors
+fn operand_type_error_message(instruction: OpCodeTypes) -> &'static str {
+    match instruction {
+        OpCodeTypes::NEGATE => "Operand must be a number.",
+        _ => "Operands must be numbers.",
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum VirtualMachineError {
     #[error("{0:?}")]
@@ -51,9 +59,7 @@ pub enum VirtualMachineError {
     #[error("Expected operand on the stack but none found.")]
     MissingStackOperand,
 
-    #[error(
-        "Instruction {instruction} expected stack operand of type '{expected}'. Got : '{actual}"
-    )]
+    #[error("{}", operand_type_error_message(*.instruction))]
     UnexpectedStackOperandType {
         instruction: OpCodeTypes,
         expected: ValueTypes,
