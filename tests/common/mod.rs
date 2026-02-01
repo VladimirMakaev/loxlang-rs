@@ -5,11 +5,17 @@
 
 use std::io::BufRead;
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use regex::Regex;
 
 use loxlang_rs::codemap::Codemap;
 use loxlang_rs::vm::{DisplayError, VirtualMachine};
+
+/// Test execution timeout in seconds
+const TEST_TIMEOUT_SECS: u64 = 2;
 
 /// Represents a compile-time error expectation from a test file
 #[derive(Debug, Clone)]
@@ -135,7 +141,31 @@ pub fn parse_expectations(code: &str) -> TestExpectations {
 ///
 /// Compiles and runs the code, comparing results against parsed expectations.
 /// Returns Ok(()) if all expectations are met, or an error description.
+/// Times out after TEST_TIMEOUT_SECS seconds.
 pub fn verify_lox_file(code: &str, path: &Path) -> Result<(), String> {
+    let code = code.to_string();
+    let path = path.to_path_buf();
+
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let result = verify_lox_file_inner(&code, &path);
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(Duration::from_secs(TEST_TIMEOUT_SECS)) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            Err(format!("Test timed out after {} seconds", TEST_TIMEOUT_SECS))
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("Test thread panicked".to_string())
+        }
+    }
+}
+
+/// Inner verification function that does the actual work
+fn verify_lox_file_inner(code: &str, path: &Path) -> Result<(), String> {
     let expectations = parse_expectations(code);
 
     // Skip nontest files
