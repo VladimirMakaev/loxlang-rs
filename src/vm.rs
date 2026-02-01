@@ -17,8 +17,9 @@ use tracing::debug;
 use crate::{
     byte_code::{ByteCode, JumpOffset, OpCode, OpCodeError, OpCodeTypes},
     codemap::Codemap,
-    gc::Heap,
-    interner::{DefaultInterner, Interner, StrId},
+    gc::{GcRef, Heap},
+    interner::{DefaultInterner, DefaultStringTable, Interner, StringTable, StrId},
+    object::{Obj, ObjClosure, ObjFunction, ObjKind, UpvalueLocation},
     parser::{
         AstExpression, AstIdent, AstStmt, Expression, ForStmt, FunDeclaration, IfStmt,
         LogicalExpression, ParseError, Parser, Span, StmtDeclaration, WhileStmt,
@@ -234,6 +235,7 @@ pub struct VirtualMachine {
     pub(crate) frame_idx: usize,
     frames: Vec<CallFrame>,
     pub(crate) interner: DefaultInterner,
+    pub(crate) string_table: DefaultStringTable, // NEW: GcRef-based string lookup
     pub(crate) stack: Vec<Value>,
     pub(crate) constants: Vec<Value>,
     closures: Vec<Closure>,
@@ -252,6 +254,7 @@ impl VirtualMachine {
             constants: Default::default(),
             stack: Default::default(),
             interner: Interner::new(BuildHasherDefault::<DefaultHasher>::default()),
+            string_table: StringTable::new(BuildHasherDefault::<DefaultHasher>::default()),
             globals: Default::default(),
             frame_idx: 0,
             frames: Default::default(),
@@ -266,6 +269,76 @@ impl VirtualMachine {
             closed_upvalues: Default::default(),
             open_upvalues: Default::default(),
             heap: Heap::new(),
+        }
+    }
+
+    // =========================================================================
+    // Heap allocation helpers for GC-managed objects
+    // =========================================================================
+
+    /// Allocate a string on the heap, deduplicating via string_table.
+    /// Returns a GcRef to the string object.
+    pub fn alloc_string(&mut self, s: String) -> GcRef {
+        let hash = self.string_table.hash_string(&s);
+
+        // Check intern table for existing string
+        if let Some(existing) = self.string_table.get(hash) {
+            if let ObjKind::String(existing_str) = &self.heap.get(existing).kind {
+                if existing_str.value == s {
+                    return existing;
+                }
+            }
+        }
+
+        // Allocate new string
+        let obj = Obj::string(s, hash);
+        let r = self.heap.alloc(obj);
+        self.string_table.insert(hash, r);
+        r
+    }
+
+    /// Allocate a function on the heap.
+    pub fn alloc_function(&mut self, name: GcRef, arity: usize, code: ByteCode, upvalue_count: usize) -> GcRef {
+        let obj = Obj::function(name, arity, code, upvalue_count);
+        self.heap.alloc(obj)
+    }
+
+    /// Allocate a closure on the heap.
+    pub fn alloc_closure(&mut self, function: GcRef, upvalues: Vec<GcRef>) -> GcRef {
+        let obj = Obj::closure(function, upvalues);
+        self.heap.alloc(obj)
+    }
+
+    /// Allocate an upvalue on the heap.
+    pub fn alloc_upvalue(&mut self, location: UpvalueLocation) -> GcRef {
+        let obj = Obj::upvalue(location);
+        self.heap.alloc(obj)
+    }
+
+    /// Get a string value from a GcRef (panics if not a string).
+    pub fn get_heap_string(&self, r: GcRef) -> &str {
+        if let ObjKind::String(s) = &self.heap.get(r).kind {
+            &s.value
+        } else {
+            panic!("Expected string object")
+        }
+    }
+
+    /// Get a function from a GcRef (panics if not a function).
+    pub fn get_heap_function(&self, r: GcRef) -> &ObjFunction {
+        if let ObjKind::Function(f) = &self.heap.get(r).kind {
+            f
+        } else {
+            panic!("Expected function object")
+        }
+    }
+
+    /// Get a closure from a GcRef (panics if not a closure).
+    pub fn get_heap_closure(&self, r: GcRef) -> &ObjClosure {
+        if let ObjKind::Closure(c) = &self.heap.get(r).kind {
+            c
+        } else {
+            panic!("Expected closure object")
         }
     }
 
