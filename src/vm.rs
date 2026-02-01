@@ -1488,6 +1488,18 @@ impl VirtualMachine {
                         });
                     }
                 }
+                OpCode::INHERIT => {
+                    // Placeholder: Inheritance implementation in Phase 6-03
+                    todo!("INHERIT opcode not yet implemented")
+                }
+                OpCode::GET_SUPER(_) => {
+                    // Placeholder: Super method lookup in Phase 6-05
+                    todo!("GET_SUPER opcode not yet implemented")
+                }
+                OpCode::SUPER_INVOKE(_, _) => {
+                    // Placeholder: Super invocation in Phase 6-06
+                    todo!("SUPER_INVOKE opcode not yet implemented")
+                }
             }
             self.frames[self.frame_idx].inc_ip(size);
         }
@@ -1593,7 +1605,7 @@ impl VirtualMachine {
                 }
                 self.compile_declaration_from_stack(ident, context, result)
             }
-            crate::parser::Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration { name, methods })) => {
+            crate::parser::Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration { name, methods, .. })) => {
                 // Emit CLASS opcode with name constant index
                 let name_ref = self.alloc_string(name.node.clone());
                 let name_const_idx = self.constants.len() as u16;

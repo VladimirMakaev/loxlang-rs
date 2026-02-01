@@ -104,6 +104,15 @@ impl ByteCode {
                 *arg_count = self.read_u8(ip + 2);
                 4
             }
+            Some(OpCode::GET_SUPER(idx)) => {
+                *idx = self.read_u16(ip);
+                3
+            }
+            Some(OpCode::SUPER_INVOKE(name_idx, arg_count)) => {
+                *name_idx = self.read_u16(ip);
+                *arg_count = self.read_u8(ip + 2);
+                4
+            }
             _ => 1,
         };
         result.map(|x| Ok((x, size)))
@@ -168,6 +177,12 @@ impl ByteCode {
                 self.code.push(arg_count);
                 3
             }
+            OpCode::GET_SUPER(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::SUPER_INVOKE(name_idx, arg_count) => {
+                write_one_u16(&mut self.code, name_idx);
+                self.code.push(arg_count);
+                3
+            }
             _ => 0,
         };
         self.lines.extend(repeat(line).take(bytes_count + 1));
@@ -212,6 +227,9 @@ pub enum OpCode {
     SET_PROPERTY(u16),
     METHOD(u16),
     INVOKE(u16, u8), // (method_name_const_idx, arg_count)
+    INHERIT,           // No operands - stack: [superclass, subclass] -> [superclass]
+    GET_SUPER(u16),    // u16 = method name constant index
+    SUPER_INVOKE(u16, u8), // u16 = method name, u8 = arg count
 }
 
 #[cfg(test)]
