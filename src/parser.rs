@@ -130,7 +130,15 @@ pub enum LogicalExpression {
         left: Box<AstExpression>,
         right: Box<AstExpression>,
     },
+    GreaterEqual {
+        left: Box<AstExpression>,
+        right: Box<AstExpression>,
+    },
     Less {
+        left: Box<AstExpression>,
+        right: Box<AstExpression>,
+    },
+    LessEqual {
         left: Box<AstExpression>,
         right: Box<AstExpression>,
     },
@@ -724,8 +732,16 @@ impl<'source> Parser<'source> {
                 right: Box::new(right),
             })
             .ast(span)),
-            TokenType::GreaterEqual => todo!(),
-            TokenType::LessEqual => todo!(),
+            TokenType::GreaterEqual => Ok(Expression::Logical(LogicalExpression::GreaterEqual {
+                left: Box::new(left),
+                right: Box::new(right),
+            })
+            .ast(span)),
+            TokenType::LessEqual => Ok(Expression::Logical(LogicalExpression::LessEqual {
+                left: Box::new(left),
+                right: Box::new(right),
+            })
+            .ast(span)),
             TokenType::GREATER => Ok(Expression::Logical(LogicalExpression::Greater {
                 left: Box::new(left),
                 right: Box::new(right),
@@ -1077,8 +1093,14 @@ mod tests {
             Expression::Logical(LogicalExpression::Greater { left, right }) => {
                 eval(&left) > eval(&right)
             }
+            Expression::Logical(LogicalExpression::GreaterEqual { left, right }) => {
+                eval(&left) >= eval(&right)
+            }
             Expression::Logical(LogicalExpression::Less { left, right }) => {
                 eval(&left) < eval(&right)
+            }
+            Expression::Logical(LogicalExpression::LessEqual { left, right }) => {
+                eval(&left) <= eval(&right)
             }
             Expression::Logical(LogicalExpression::And { left, right }) => {
                 eval_bool(&left) && eval_bool(&right)
