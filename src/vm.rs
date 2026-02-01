@@ -521,9 +521,8 @@ impl VirtualMachine {
             Value::Number(_x) => true,
             Value::Bool(x) => *x,
             Value::Nil => false,
-            Value::String(_) => true,
             Value::Closure(_) => true,
-            Value::Object(_) => true,
+            Value::Object(_) => true, // All objects (including strings) are truthy
         }
     }
 
@@ -532,8 +531,9 @@ impl VirtualMachine {
             (Value::Number(l), Value::Number(r)) => l == r,
             (Value::Bool(l), Value::Bool(r)) => l == r,
             (Value::Nil, Value::Nil) => true,
-            (Value::String(l), Value::String(r)) => l == r,
             (Value::Closure(l), Value::Closure(r)) => l == r,
+            // String interning ensures equal strings have same GcRef (identity comparison)
+            (Value::Object(l), Value::Object(r)) => l == r,
             (_, _) => false,
         }
     }
@@ -1900,7 +1900,6 @@ impl<'a> Display for DispayValue<'a> {
             }
             Value::Bool(x) => write!(f, "{}", x),
             Value::Nil => f.write_str("nil"),
-            Value::String(str_id) => f.write_str(self.vm.interner.get_str(str_id)),
             Value::Closure(ClosureValue { closure_id }) => {
                 let closure = &self.vm.closures[closure_id];
                 write!(
@@ -1916,7 +1915,7 @@ impl<'a> Display for DispayValue<'a> {
                 use crate::object::ObjKind;
                 let obj = self.vm.heap.get(gc_ref);
                 match &obj.kind {
-                    ObjKind::String(s) => write!(f, "{}", s.value),
+                    ObjKind::String(s) => f.write_str(&s.value),
                     ObjKind::Closure(c) => {
                         // Get the function name from the closure's function
                         let func = self.vm.heap.get(c.function);
