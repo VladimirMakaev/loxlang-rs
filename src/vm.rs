@@ -216,6 +216,20 @@ impl VirtualMachine {
         self.heap.alloc(obj)
     }
 
+    /// Allocate a class on the heap.
+    pub fn alloc_class(&mut self, name: GcRef) -> GcRef {
+        self.maybe_collect();
+        let obj = Obj::class(name);
+        self.heap.alloc(obj)
+    }
+
+    /// Allocate an instance on the heap.
+    pub fn alloc_instance(&mut self, klass: GcRef) -> GcRef {
+        self.maybe_collect();
+        let obj = Obj::instance(klass);
+        self.heap.alloc(obj)
+    }
+
     /// Get a string value from a GcRef (panics if not a string).
     pub fn get_heap_string(&self, r: GcRef) -> &str {
         if let ObjKind::String(s) = &self.heap.get(r).kind {
@@ -1831,6 +1845,29 @@ impl<'a> Display for DispayValue<'a> {
                         }
                     }
                     ObjKind::Upvalue(_) => write!(f, "<upvalue>"),
+                    ObjKind::Class(c) => {
+                        // Print class name only
+                        let name_obj = self.vm.heap.get(c.name);
+                        if let ObjKind::String(name_str) = &name_obj.kind {
+                            f.write_str(&name_str.value)
+                        } else {
+                            write!(f, "<class>")
+                        }
+                    }
+                    ObjKind::Instance(i) => {
+                        // Print "{ClassName} instance"
+                        let klass_obj = self.vm.heap.get(i.klass);
+                        if let ObjKind::Class(klass) = &klass_obj.kind {
+                            let name_obj = self.vm.heap.get(klass.name);
+                            if let ObjKind::String(name_str) = &name_obj.kind {
+                                write!(f, "{} instance", name_str.value)
+                            } else {
+                                write!(f, "<instance>")
+                            }
+                        } else {
+                            write!(f, "<instance>")
+                        }
+                    }
                 }
             }
         }
