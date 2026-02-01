@@ -37,7 +37,12 @@ pub enum RuntimeErrorKind {
     InvalidFunArity { got: usize, expected: usize },
     #[error("Unexpected runtime {error}")]
     Unexpected { error: anyhow::Error },
+    #[error("Stack overflow.")]
+    StackOverflow,
 }
+
+/// Maximum call frame depth before stack overflow
+const FRAMES_MAX: usize = 256;
 
 /// Returns the clox-formatted error message for operand type errors
 fn operand_type_error_message(instruction: OpCodeTypes) -> &'static str {
@@ -953,6 +958,13 @@ impl VirtualMachine {
                                     got: arg_count,
                                     expected: fun.arity,
                                 },
+                                stacktrace: self.stacktrace(),
+                            });
+                        }
+                        // Check for stack overflow before pushing new frame
+                        if self.frames.len() >= FRAMES_MAX {
+                            return Err(VirtualMachineError::RuntimeError {
+                                kind: RuntimeErrorKind::StackOverflow,
                                 stacktrace: self.stacktrace(),
                             });
                         }
