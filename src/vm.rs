@@ -1780,6 +1780,12 @@ impl VirtualMachine {
                     ParseError::VariableAlreadyDeclared { span: ident.span },
                 ]));
             }
+            // Check locals limit before adding
+            if context.locals_count() >= LOCALS_MAX {
+                return Err(VirtualMachineError::CompileError(vec![
+                    ParseError::TooManyLocals { span: ident.span },
+                ]));
+            }
             let offset = context.new_local(ident.node());
             result.write_op(
                 OpCode::SETLOCAL(offset as u16),
@@ -1831,18 +1837,21 @@ impl VirtualMachine {
                 let name_ref = self.alloc_string(name.node.clone());
                 let function_ref = self.alloc_function(name_ref, params.len(), byte_code, upvalue_count);
 
-                // Store function ref in constants table and use index in CLOSURE opcode
-                let function_const_idx = self.constants.len() as u16;
-                self.constants.push(Value::Object(function_ref));
+                // Store upvalues info before leaving function context
+                let upvalues: Vec<_> = context.upvalues.iter().map(|(_, up)| up.clone()).collect();
+
+                context.leave_function();
+
+                // Store function ref in constants table (in parent's context)
+                let function_const_idx = self.add_constant_checked(Value::Object(function_ref), context, name.span)?;
 
                 result.write_op(
                     OpCode::CLOSURE(function_const_idx),
                     self.lookup_source_line(name.start()),
                 );
-                for (_, up) in context.upvalues.iter() {
+                for up in upvalues.iter() {
                     up.write_to(result, self.lookup_source_line(name.start()));
                 }
-                context.leave_function();
 
                 self.compile_declaration_from_stack(name, context, result)?;
                 Ok(())
@@ -1860,8 +1869,7 @@ impl VirtualMachine {
                 let has_superclass = superclass.is_some();
                 // Emit CLASS opcode with name constant index
                 let name_ref = self.alloc_string(name.node.clone());
-                let name_const_idx = self.constants.len() as u16;
-                self.constants.push(Value::Object(name_ref));
+                let name_const_idx = self.add_constant_checked(Value::Object(name_ref), context, name.span)?;
                 result.write_op(
                     OpCode::CLASS(name_const_idx),
                     self.lookup_source_line(name.start()),
@@ -1973,23 +1981,25 @@ impl VirtualMachine {
                         upvalue_count,
                     );
 
-                    // Store function ref in constants table and use index in CLOSURE opcode
-                    let function_const_idx = self.constants.len() as u16;
-                    self.constants.push(Value::Object(function_ref));
+                    // Store upvalues info before leaving function context
+                    let upvalues: Vec<_> = context.upvalues.iter().map(|(_, up)| up.clone()).collect();
+
+                    context.leave_function();
+
+                    // Store function ref in constants table (in parent's context)
+                    let function_const_idx = self.add_constant_checked(Value::Object(function_ref), context, method.name.span)?;
 
                     result.write_op(
                         OpCode::CLOSURE(function_const_idx),
                         self.lookup_source_line(method.name.start()),
                     );
-                    for (_, up) in context.upvalues.iter() {
+                    for up in upvalues.iter() {
                         up.write_to(result, self.lookup_source_line(method.name.start()));
                     }
-                    context.leave_function();
 
                     // Allocate method name string for METHOD opcode
                     let method_name_const_ref = self.alloc_string(method.name.node.clone());
-                    let method_name_const_idx = self.constants.len() as u16;
-                    self.constants.push(Value::Object(method_name_const_ref));
+                    let method_name_const_idx = self.add_constant_checked(Value::Object(method_name_const_ref), context, method.name.span)?;
 
                     // Emit METHOD opcode
                     result.write_op(
@@ -2093,6 +2103,17 @@ impl VirtualMachine {
                 );
                 result.write_op(OpCode::POP, self.lookup_source_line(condition.start()));
                 self.compile_statement(loop_block, context, result)?;
+
+                // Check if loop body is too large
+                let loop_offset = self.next_instruction(result) - start_of_loop;
+                if loop_offset > i16::MAX as usize {
+                    // Point span at the closing brace (end - 1)
+                    let end = loop_block.end();
+                    return Err(VirtualMachineError::CompileError(vec![
+                        ParseError::LoopBodyTooLarge { span: Span::new(end - 1, end) },
+                    ]));
+                }
+
                 result.write_op(
                     OpCode::LOOP(self.offset_since(start_of_loop, result).into()),
                     self.lookup_source_line(loop_block.end()),
@@ -2129,6 +2150,16 @@ impl VirtualMachine {
 
                 if let Some(increment) = increment {
                     self.compile_statement(increment, context, result)?;
+                }
+
+                // Check if loop body is too large
+                let loop_offset = self.next_instruction(result) - when_loop_starts;
+                if loop_offset > i16::MAX as usize {
+                    // Point span at the closing brace (end - 1)
+                    let end = block.end();
+                    return Err(VirtualMachineError::CompileError(vec![
+                        ParseError::LoopBodyTooLarge { span: Span::new(end - 1, end) },
+                    ]));
                 }
 
                 result.write_op(
@@ -2190,7 +2221,9 @@ impl VirtualMachine {
                 self.lookup_source_line(span.start()),
             )
         } else {
-            match context.resolve_upvalue(name) {
+            match context.resolve_upvalue_checked(name, span)
+                .map_err(|e| VirtualMachineError::CompileError(vec![e]))?
+            {
                 Some((idx, _)) => {
                     result.write_op(
                         OpCode::SETUPVALUE(idx as u16),
@@ -2229,7 +2262,9 @@ impl VirtualMachine {
                         self.lookup_source_line(expr.start()),
                     )
                 } else {
-                    match context.resolve_upvalue(name.as_str()) {
+                    match context.resolve_upvalue_checked(name.as_str(), expr.span)
+                        .map_err(|e| VirtualMachineError::CompileError(vec![e]))?
+                    {
                         Some((idx, _)) => {
                             result.write_op(
                                 OpCode::GETUPVALUE(idx as u16),
@@ -2247,20 +2282,20 @@ impl VirtualMachine {
                 }
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NumberLiteral(num)) => {
+                let idx = self.add_constant_checked((*num).into(), context, expr.span)?;
                 result.write_op(
-                    OpCode::CONSTANT(self.constants.len() as u16),
+                    OpCode::CONSTANT(idx),
                     self.lookup_source_line(expr.start()),
                 );
-                self.add_constant((*num).into());
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::StringLiteral(s)) => {
                 let gc_ref = self.alloc_string(s.to_string());
                 let val = Value::Object(gc_ref);
+                let idx = self.add_constant_checked(val, context, expr.span)?;
                 result.write_op(
-                    OpCode::CONSTANT(self.constants.len() as u16),
+                    OpCode::CONSTANT(idx),
                     self.lookup_source_line(expr.start()),
                 );
-                self.add_constant(val);
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::BoolLiteral(x)) => {
                 if *x {
@@ -2383,8 +2418,7 @@ impl VirtualMachine {
 
                     // Emit INVOKE with method name and arg count
                     let name_ref = self.alloc_string(name.clone());
-                    let name_idx = self.constants.len() as u16;
-                    self.constants.push(Value::Object(name_ref));
+                    let name_idx = self.add_constant_checked(Value::Object(name_ref), context, expr.span)?;
                     result.write_op(OpCode::INVOKE(name_idx, arguments.len() as u8), line);
                 } else {
                     // Regular call - existing logic
@@ -2400,8 +2434,7 @@ impl VirtualMachine {
                 self.compile_expr(object, context, result)?;
                 // Allocate property name string and add to constants
                 let name_ref = self.alloc_string(name.clone());
-                let name_const_idx = self.constants.len() as u16;
-                self.constants.push(Value::Object(name_ref));
+                let name_const_idx = self.add_constant_checked(Value::Object(name_ref), context, expr.span)?;
                 // Emit GET_PROPERTY opcode with constant index
                 result.write_op(
                     OpCode::GET_PROPERTY(name_const_idx),
@@ -2415,8 +2448,7 @@ impl VirtualMachine {
                 self.compile_expr(value, context, result)?;
                 // Allocate property name string and add to constants
                 let name_ref = self.alloc_string(name.clone());
-                let name_const_idx = self.constants.len() as u16;
-                self.constants.push(Value::Object(name_ref));
+                let name_const_idx = self.add_constant_checked(Value::Object(name_ref), context, expr.span)?;
                 // Emit SET_PROPERTY opcode with constant index
                 result.write_op(
                     OpCode::SET_PROPERTY(name_const_idx),
@@ -2483,8 +2515,7 @@ impl VirtualMachine {
 
                 // Emit GET_SUPER with method name constant
                 let method_name_ref = self.alloc_string(method.clone());
-                let method_const_idx = self.constants.len() as u16;
-                self.constants.push(Value::Object(method_name_ref));
+                let method_const_idx = self.add_constant_checked(Value::Object(method_name_ref), context, expr.span)?;
 
                 result.write_op(OpCode::GET_SUPER(method_const_idx), line);
             }
@@ -2728,6 +2759,15 @@ impl<'a> LexicalScope<'a> {
         self.upvalues.len()
     }
 
+    /// Resolve upvalue with limit checking. Returns error if limit exceeded.
+    pub fn resolve_upvalue_checked(&mut self, name: &'a str, span: Span) -> Result<Option<(usize, UpvalueRef)>, ParseError> {
+        let result = self.resolve_upvalue(name);
+        if self.upvalues.len() > UPVALUES_MAX {
+            return Err(ParseError::TooManyUpvalues { span });
+        }
+        Ok(result)
+    }
+
     pub fn iter_local_upvalues(&self) -> impl Iterator<Item = (&str, usize)> {
         self.upvalues
             .iter()
@@ -2930,6 +2970,9 @@ impl<'a> Display for DisplayError<'a> {
                         }
                         ParseError::UnexpectedEof { last_position } => {
                             Self::report_error_at_end(self.codemap, f, *last_position, "Expect expression.")?
+                        }
+                        ParseError::UnexpectedEofWithMessage { last_position, message } => {
+                            Self::report_error_at_end(self.codemap, f, *last_position, message)?
                         }
                         _ => writeln!(f, "{}", error)?,
                     }

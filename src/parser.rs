@@ -29,6 +29,8 @@ pub enum ParseError {
 
     #[error("Unexpected end of file.")]
     UnexpectedEof { last_position: usize },
+    #[error("{message}")]
+    UnexpectedEofWithMessage { last_position: usize, message: String },
     #[error("Number literal can't be converted to number")]
     InvalidNumberLiteral {
         #[from]
@@ -830,7 +832,19 @@ impl<'source> Parser<'source> {
 
     fn dot(&mut self, left: AstExpression) -> ExprResult {
         self.consume(TokenType::Dot)?;
-        let name_token = self.consume(TokenType::IDENTIFIER)?;
+        // Check for EOF before trying to consume identifier
+        if self.lexer.peek().is_none() {
+            return Err(ParseError::UnexpectedEofWithMessage {
+                last_position: self.last_position,
+                message: "Expect property name after '.'.".to_owned(),
+            });
+        }
+        let name_token = self.consume_or_else(TokenType::IDENTIFIER, |t| {
+            ParseError::UnexpectedToken {
+                span: t.span(),
+                expectation: "Expect property name after '.'.".to_owned(),
+            }
+        })?;
         let name = name_token.span().slice(self.code).to_string();
         let span = Span::new(left.start(), name_token.end());
         Ok(Expression::GetProperty {
