@@ -1810,14 +1810,31 @@ impl VirtualMachine {
                 self.patch_offset(result, jump_out + 1, self.offset_since(jump_out, result));
             }
             crate::parser::Expression::Call { calee, arguments } => {
-                self.compile_expr(&calee, context, result)?;
-                for arg in arguments {
-                    self.compile_expr(arg, context, result)?;
+                let line = self.lookup_source_line(calee.start());
+
+                // Check for method invoke pattern: obj.method(args)
+                if let Expression::GetProperty { object, name } = calee.node() {
+                    // Compile receiver (pushes instance)
+                    self.compile_expr(object, context, result)?;
+
+                    // Compile arguments
+                    for arg in arguments {
+                        self.compile_expr(arg, context, result)?;
+                    }
+
+                    // Emit INVOKE with method name and arg count
+                    let name_ref = self.alloc_string(name.clone());
+                    let name_idx = self.constants.len() as u16;
+                    self.constants.push(Value::Object(name_ref));
+                    result.write_op(OpCode::INVOKE(name_idx, arguments.len() as u8), line);
+                } else {
+                    // Regular call - existing logic
+                    self.compile_expr(&calee, context, result)?;
+                    for arg in arguments {
+                        self.compile_expr(arg, context, result)?;
+                    }
+                    result.write_op(OpCode::CALL(arguments.len() as u8), line);
                 }
-                result.write_op(
-                    OpCode::CALL(arguments.len() as u8),
-                    self.lookup_source_line(calee.start()),
-                )
             }
             crate::parser::Expression::GetProperty { object, name } => {
                 // Compile the object expression (pushes instance onto stack)
@@ -1942,6 +1959,10 @@ impl<'a> LexicalScope<'a> {
 
     pub fn is_toplevel(&self) -> bool {
         self.block_depth == 0
+    }
+
+    pub fn function_type(&self) -> FunctionType {
+        self.function_type
     }
 
     pub fn root() -> Self {
