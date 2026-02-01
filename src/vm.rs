@@ -892,6 +892,8 @@ impl VirtualMachine {
                                         stacktrace: self.stacktrace(),
                                     });
                                 }
+                                // Advance caller's IP before pushing new frame
+                                self.frames[self.frame_idx].inc_ip(size);
                                 self.frames.push(CallFrame {
                                     ip: 0,
                                     closure: obj_ref,
@@ -935,6 +937,8 @@ impl VirtualMachine {
                                     }
 
                                     // Push call frame for init
+                                    // Advance caller's IP before pushing new frame
+                                    self.frames[self.frame_idx].inc_ip(size);
                                     self.frames.push(CallFrame {
                                         ip: 0,
                                         closure: init_ref,
@@ -984,6 +988,8 @@ impl VirtualMachine {
                                 }
 
                                 // Push call frame
+                                // Advance caller's IP before pushing new frame
+                                self.frames[self.frame_idx].inc_ip(size);
                                 self.frames.push(CallFrame {
                                     ip: 0,
                                     closure: method_ref,
@@ -1023,7 +1029,7 @@ impl VirtualMachine {
                     self.frames.pop();
                     self.frame_idx -= 1;
                     self.stack.push(ret_value);
-                    self.frames[self.frame_idx].inc_ip(2); // add sizeof call instruction
+                    // Caller's IP was already advanced before pushing the frame
 
                     continue;
                 }
@@ -1439,6 +1445,8 @@ impl VirtualMachine {
                                                 stacktrace: self.stacktrace(),
                                             });
                                         }
+                                        // Advance caller's IP before pushing new frame
+                                        self.frames[self.frame_idx].inc_ip(size);
                                         self.frames.push(CallFrame {
                                             ip: 0,
                                             closure: method_ref,
