@@ -1104,14 +1104,32 @@ impl VirtualMachine {
                                 // Push field value
                                 self.push(value);
                             } else {
-                                // Field not found
-                                let name = self.get_heap_string(name_ref).to_string();
-                                return Err(VirtualMachineError::RuntimeError {
-                                    kind: RuntimeErrorKind::Unexpected {
-                                        error: anyhow::Error::msg(format!("Undefined property '{}'.", name)),
-                                    },
-                                    stacktrace: self.stacktrace(),
-                                });
+                                // Field not found, check class methods
+                                let klass_ref = instance.klass;
+                                let klass_obj = self.heap.get(klass_ref);
+                                if let ObjKind::Class(klass) = &klass_obj.kind {
+                                    if let Some(&method_ref) = klass.methods.get(&name_ref) {
+                                        // Clone instance_value before passing to alloc to avoid borrow issues
+                                        let receiver = instance_value.clone();
+                                        let bound_ref = self.alloc_bound_method(receiver, method_ref);
+                                        // Pop instance from stack
+                                        self.pop()?;
+                                        // Push bound method
+                                        self.push(Value::Object(bound_ref));
+                                    } else {
+                                        // Neither field nor method found
+                                        let name = self.get_heap_string(name_ref).to_string();
+                                        return Err(VirtualMachineError::RuntimeError {
+                                            kind: RuntimeErrorKind::Unexpected {
+                                                error: anyhow::Error::msg(format!("Undefined property '{}'.", name)),
+                                            },
+                                            stacktrace: self.stacktrace(),
+                                        });
+                                    }
+                                } else {
+                                    // klass is not a class (shouldn't happen)
+                                    return Err(self.unhandled_error("Instance's klass is not a class"));
+                                }
                             }
                         } else {
                             // Not an instance
