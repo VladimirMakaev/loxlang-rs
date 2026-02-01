@@ -24,6 +24,13 @@ pub enum ObjKind {
     Class(ObjClass),
     Instance(ObjInstance),
     BoundMethod(ObjBoundMethod),
+    Native(ObjNative),
+}
+
+/// A native function object.
+pub struct ObjNative {
+    pub name: &'static str, // Static string, no heap allocation
+    pub arity: usize,
 }
 
 /// A string object with its value and pre-computed hash.
@@ -92,6 +99,7 @@ impl Obj {
                     i.fields.len() * (std::mem::size_of::<GcRef>() + std::mem::size_of::<Value>())
                 }
                 ObjKind::BoundMethod(_) => 0, // Method is separate object
+                ObjKind::Native(_) => 0,     // Native uses static str, no heap allocation
             }
     }
 
@@ -161,6 +169,14 @@ impl Obj {
             kind: ObjKind::BoundMethod(ObjBoundMethod { receiver, method }),
         }
     }
+
+    /// Creates a new native function object.
+    pub fn native(name: &'static str, arity: usize) -> Self {
+        Obj {
+            is_marked: false,
+            kind: ObjKind::Native(ObjNative { name, arity }),
+        }
+    }
 }
 
 impl ObjKind {
@@ -207,6 +223,7 @@ impl ObjKind {
                 }
                 refs
             }
+            ObjKind::Native(_) => vec![], // Native functions have no GC references
         }
     }
 }

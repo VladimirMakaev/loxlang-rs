@@ -16,7 +16,7 @@ use crate::{
     codemap::Codemap,
     gc::{GcRef, Heap},
     interner::{DefaultInterner, DefaultStringTable, Interner, StringTable, StrId},
-    object::{Obj, ObjBoundMethod, ObjClosure, ObjFunction, ObjKind, ObjUpvalue, UpvalueLocation},
+    object::{Obj, ObjBoundMethod, ObjClosure, ObjFunction, ObjKind, ObjNative, ObjUpvalue, UpvalueLocation},
     parser::{
         AstExpression, AstIdent, AstStmt, ClassDeclaration, Expression, ForStmt, FunDeclaration, IfStmt,
         LogicalExpression, ParseError, Parser, Span, StmtDeclaration, WhileStmt,
@@ -2917,6 +2917,7 @@ impl<'a> Display for DispayValue<'a> {
                             write!(f, "<fn>")
                         }
                     }
+                    ObjKind::Native(_) => write!(f, "<native fn>"),
                 }
             }
         }
