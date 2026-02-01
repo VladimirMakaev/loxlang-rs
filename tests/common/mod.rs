@@ -70,6 +70,10 @@ pub fn parse_expectations(code: &str) -> TestExpectations {
     let at_end_error_regex =
         Regex::new(r"//\s*\[line (\d+)\]\s*Error at end:\s*(.+)").unwrap();
 
+    // Lexer error without token: // [line N] Error: message
+    let lexer_error_regex =
+        Regex::new(r"//\s*\[line (\d+)\]\s*Error:\s*(.+)").unwrap();
+
     // clox-specific error (treat same as explicit): // [c line N] Error at 'token': message
     let clox_error_regex =
         Regex::new(r"//\s*\[c line (\d+)\]\s*Error at '([^']+)':\s*(.+)").unwrap();
@@ -120,6 +124,18 @@ pub fn parse_expectations(code: &str) -> TestExpectations {
             expectations.compile_errors.push(CompileError {
                 line: error_line,
                 token: "end".to_string(),
+                message,
+            });
+            continue;
+        }
+
+        // Check for lexer error: [line N] Error: message (no token)
+        if let Some(captures) = lexer_error_regex.captures(&line) {
+            let error_line: usize = captures.get(1).unwrap().as_str().parse().unwrap_or(line_no);
+            let message = captures.get(2).unwrap().as_str().to_string();
+            expectations.compile_errors.push(CompileError {
+                line: error_line,
+                token: "".to_string(), // Empty token for lexer errors
                 message,
             });
             continue;
@@ -295,7 +311,13 @@ fn verify_lox_file_inner(code: &str, path: &Path) -> Result<(), String> {
 
             // Check if expected compile errors match
             for expected in &expectations.compile_errors {
-                let expected_pattern = if expected.token == "end" {
+                let expected_pattern = if expected.token.is_empty() {
+                    // Lexer error: "[line N] Error: message" format (no "at 'token'")
+                    format!(
+                        "[line {}] Error: {}",
+                        expected.line, expected.message
+                    )
+                } else if expected.token == "end" {
                     // "Error at end:" format (no quotes around end)
                     format!(
                         "[line {}] Error at end: {}",

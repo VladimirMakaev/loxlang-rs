@@ -103,6 +103,10 @@ pub enum LexerError {
     InvalidToken,
     #[error("Invalid token found at {start:?}..{end:?}")]
     InvalidTokenAt { start: PosIdx, end: PosIdx },
+    #[error("Unterminated string")]
+    UnterminatedString { line: usize },
+    #[error("Unexpected character")]
+    UnexpectedCharacter { line: usize },
 }
 
 #[derive(Debug, PartialEq)]
@@ -163,10 +167,20 @@ impl<'source> Lexer<'source> {
                 line: self.logos_lexer.extras,
             })),
             Some(Err(err)) => match err {
-                LexerError::InvalidToken => Some(Err(LexerError::InvalidTokenAt {
-                    start: self.logos_lexer.span().start,
-                    end: self.logos_lexer.span().end,
-                })),
+                LexerError::InvalidToken => {
+                    let span = self.logos_lexer.span();
+                    let source = self.logos_lexer.source();
+
+                    // Count newlines up to error position to get correct line number
+                    let line = source[..span.start].chars().filter(|&c| c == '\n').count() + 1;
+
+                    // Check if this is an unterminated string (starts with ")
+                    if source[span.start..].starts_with('"') {
+                        Some(Err(LexerError::UnterminatedString { line }))
+                    } else {
+                        Some(Err(LexerError::UnexpectedCharacter { line }))
+                    }
+                }
                 e => Some(Err(e)),
             },
             None => None,

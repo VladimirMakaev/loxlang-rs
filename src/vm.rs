@@ -17,6 +17,7 @@ use crate::{
     codemap::Codemap,
     gc::{GcRef, Heap},
     interner::{DefaultInterner, DefaultStringTable, Interner, StringTable, StrId},
+    lexer::LexerError,
     object::{Obj, ObjBoundMethod, ObjClosure, ObjFunction, ObjKind, ObjUpvalue, UpvalueLocation},
     parser::{
         AstExpression, AstIdent, AstStmt, ClassDeclaration, Expression, ForStmt, FunDeclaration, IfStmt,
@@ -1858,12 +1859,51 @@ impl VirtualMachine {
             }
 
             crate::parser::Stmt::Declarations(StmtDeclaration::Variable { ident, expr }) => {
-                if let Some(e) = expr {
-                    self.compile_expr(e, context, result)?;
+                // For local variables, we need to detect self-referencing initializers.
+                // Strategy: declare the local as "uninitialized" before compiling the initializer,
+                // then mark it as initialized after. resolve_local will check this.
+                if !context.is_toplevel() {
+                    if context.is_already_declared(&ident.node) {
+                        return Err(VirtualMachineError::CompileError(vec![
+                            ParseError::VariableAlreadyDeclared { span: ident.span },
+                        ]));
+                    }
+                    // Check locals limit before adding
+                    if context.locals_count() >= LOCALS_MAX {
+                        return Err(VirtualMachineError::CompileError(vec![
+                            ParseError::TooManyLocals { span: ident.span },
+                        ]));
+                    }
+                    // Declare local as uninitialized
+                    let offset = context.declare_local_uninitialized(ident.node());
+
+                    // Compile initializer
+                    if let Some(e) = expr {
+                        self.compile_expr(e, context, result)?;
+                    } else {
+                        result.write_op(OpCode::NIL, self.lookup_source_line(ident.start()));
+                    }
+
+                    // Mark as initialized and store
+                    context.mark_local_initialized();
+                    result.write_op(
+                        OpCode::SETLOCAL(offset as u16),
+                        self.lookup_source_line(ident.start()),
+                    );
                 } else {
-                    result.write_op(OpCode::NIL, self.lookup_source_line(ident.start()));
+                    // Global variable
+                    if let Some(e) = expr {
+                        self.compile_expr(e, context, result)?;
+                    } else {
+                        result.write_op(OpCode::NIL, self.lookup_source_line(ident.start()));
+                    }
+                    let ident_idx = self.interner.intern_str(ident.node());
+                    result.write_op(
+                        OpCode::DECLAREGLOBAL(ident_idx),
+                        self.lookup_source_line(ident.start()),
+                    );
                 }
-                self.compile_declaration_from_stack(ident, context, result)
+                Ok(())
             }
             crate::parser::Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration { name, methods, superclass })) => {
                 let has_superclass = superclass.is_some();
@@ -2257,6 +2297,12 @@ impl VirtualMachine {
             }
             crate::parser::Expression::Identier(name) => {
                 if let Some(offset) = context.resolve_local(name.as_str()) {
+                    // Check if the local is uninitialized (self-referencing in initializer)
+                    if context.is_local_uninitialized(offset) {
+                        return Err(VirtualMachineError::CompileError(vec![
+                            ParseError::UninitializedLocal { span: expr.span },
+                        ]));
+                    }
                     result.write_op(
                         OpCode::GETLOCAL(offset as u16),
                         self.lookup_source_line(expr.start()),
@@ -2742,6 +2788,33 @@ impl<'a> LexicalScope<'a> {
         self.args.len() + self.locals.len() - 1
     }
 
+    /// Declare a local variable as uninitialized (depth set to SENTINEL).
+    /// Call mark_local_initialized() after compiling the initializer.
+    pub fn declare_local_uninitialized(&mut self, name: &'a str) -> usize {
+        // Use usize::MAX as sentinel for "uninitialized"
+        self.locals.push((name, usize::MAX, false));
+        self.args.len() + self.locals.len() - 1
+    }
+
+    /// Mark the most recently declared local as initialized.
+    pub fn mark_local_initialized(&mut self) {
+        if let Some(local) = self.locals.last_mut() {
+            if local.1 == usize::MAX {
+                local.1 = self.block_depth;
+            }
+        }
+    }
+
+    /// Check if a local at the given index is uninitialized (has sentinel depth).
+    pub fn is_local_uninitialized(&self, idx: usize) -> bool {
+        let local_idx = idx.saturating_sub(self.args.len());
+        if local_idx < self.locals.len() {
+            self.locals[local_idx].1 == usize::MAX
+        } else {
+            false
+        }
+    }
+
     /// Returns the total number of locals (args + locals) in the current function.
     pub fn locals_count(&self) -> usize {
         self.args.len() + self.locals.len()
@@ -2968,11 +3041,25 @@ impl<'a> Display for DisplayError<'a> {
                         ParseError::LoopBodyTooLarge { span } => {
                             Self::report_error_with_span(self.code, self.codemap, f, span, error)?
                         }
+                        ParseError::UninitializedLocal { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
                         ParseError::UnexpectedEof { last_position } => {
                             Self::report_error_at_end(self.codemap, f, *last_position, "Expect expression.")?
                         }
                         ParseError::UnexpectedEofWithMessage { last_position, message } => {
                             Self::report_error_at_end(self.codemap, f, *last_position, message)?
+                        }
+                        ParseError::LexerError { source } => {
+                            match source {
+                                LexerError::UnterminatedString { line } => {
+                                    writeln!(f, "[line {}] Error: Unterminated string.", line)?
+                                }
+                                LexerError::UnexpectedCharacter { line } => {
+                                    writeln!(f, "[line {}] Error: Unexpected character.", line)?
+                                }
+                                _ => writeln!(f, "Lexer error: {:?}", source)?,
+                            }
                         }
                         _ => writeln!(f, "{}", error)?,
                     }
