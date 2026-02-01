@@ -461,6 +461,23 @@ impl VirtualMachine {
         self.constants.push(v);
     }
 
+    /// Add a constant with limit checking. Returns the constant index or an error.
+    fn add_constant_checked<'a>(
+        &mut self,
+        v: Value,
+        context: &mut LexicalScope<'a>,
+        span: Span,
+    ) -> Result<u16, VirtualMachineError> {
+        if context.increment_constants() >= CONSTANTS_MAX {
+            return Err(VirtualMachineError::CompileError(vec![
+                ParseError::TooManyConstants { span },
+            ]));
+        }
+        let idx = self.constants.len() as u16;
+        self.constants.push(v);
+        Ok(idx)
+    }
+
     fn push(&mut self, v: Value) {
         self.stack.push(v);
     }
@@ -2540,6 +2557,7 @@ pub struct LexicalScope<'a> {
     name: Option<String>,
     function_type: FunctionType,
     enclosing_class: Option<ClassContext>, // Some if inside a class body
+    constants_count: usize, // Track constants per function for limit check
 }
 
 impl<'a> LexicalScope<'a> {
@@ -2565,6 +2583,7 @@ impl<'a> LexicalScope<'a> {
             name: None,
             function_type: FunctionType::Script,
             enclosing_class: None,
+            constants_count: 0,
         }
     }
 
@@ -2588,6 +2607,7 @@ impl<'a> LexicalScope<'a> {
                 .unwrap_or_else(|| Some(name.to_owned())),
             function_type: FunctionType::Function,
             enclosing_class,
+            constants_count: 0,
         };
 
         let prev = mem::replace(self, new);
@@ -2622,6 +2642,7 @@ impl<'a> LexicalScope<'a> {
                 .unwrap_or_else(|| Some(name.to_owned())),
             function_type,
             enclosing_class: Some(ClassContext { has_superclass }),
+            constants_count: 0,
         };
 
         let prev = mem::replace(self, new);
@@ -2654,6 +2675,7 @@ impl<'a> LexicalScope<'a> {
             name,
             function_type,
             enclosing_class,
+            constants_count,
         } = *parent;
         self.args = args;
         self.block_depth = block_depth;
@@ -2663,6 +2685,7 @@ impl<'a> LexicalScope<'a> {
         self.name = name;
         self.function_type = function_type;
         self.enclosing_class = enclosing_class;
+        self.constants_count = constants_count;
     }
 
     pub fn enter_block(&mut self) {
@@ -2686,6 +2709,23 @@ impl<'a> LexicalScope<'a> {
     pub fn new_local(&mut self, name: &'a str) -> usize {
         self.locals.push((name, self.block_depth, false));
         self.args.len() + self.locals.len() - 1
+    }
+
+    /// Returns the total number of locals (args + locals) in the current function.
+    pub fn locals_count(&self) -> usize {
+        self.args.len() + self.locals.len()
+    }
+
+    /// Increments the constants count and returns the count before incrementing.
+    pub fn increment_constants(&mut self) -> usize {
+        let count = self.constants_count;
+        self.constants_count += 1;
+        count
+    }
+
+    /// Returns the number of upvalues in the current function.
+    pub fn upvalues_count(&self) -> usize {
+        self.upvalues.len()
     }
 
     pub fn iter_local_upvalues(&self) -> impl Iterator<Item = (&str, usize)> {
