@@ -29,7 +29,7 @@ pub enum TokenType {
     PLUS,
     #[token(";")]
     Semicolon,
-    #[token("\\")]
+    #[token("/")]
     Slash,
     #[token("*")]
     Star,
@@ -49,7 +49,7 @@ pub enum TokenType {
     LESS,
     #[token("<=")]
     LessEqual,
-    #[regex(r"[a-zA-Z][a-zA-Z0-9]*")]
+    #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*")]
     IDENTIFIER,
     #[regex("\"[^\"]*\"")]
     STRING,

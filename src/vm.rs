@@ -547,8 +547,8 @@ impl VirtualMachine {
                     self.push((left * right).into());
                 }
                 OpCode::SUBTRACT => {
-                    let right = self.pop_number(OpCodeTypes::MULTIPLY)?;
-                    let left = self.pop_number(OpCodeTypes::MULTIPLY)?;
+                    let right = self.pop_number(OpCodeTypes::SUBTRACT)?;
+                    let left = self.pop_number(OpCodeTypes::SUBTRACT)?;
                     debug!(
                         "@{} SUBTRACT {} {} [line: {}]",
                         self.ip(),
@@ -557,6 +557,18 @@ impl VirtualMachine {
                         self.current_line()
                     );
                     self.push((left - right).into());
+                }
+                OpCode::DIVIDE => {
+                    let right = self.pop_number(OpCodeTypes::DIVIDE)?;
+                    let left = self.pop_number(OpCodeTypes::DIVIDE)?;
+                    debug!(
+                        "@{} DIVIDE {} / {} [line: {}]",
+                        self.ip(),
+                        left,
+                        right,
+                        self.current_line()
+                    );
+                    self.push((left / right).into());
                 }
                 OpCode::NEGATE => {
                     let value = self.pop_number(OpCodeTypes::NEGATE)?;
@@ -1234,7 +1246,11 @@ impl VirtualMachine {
                 self.compile_expr(&right.as_ref(), context, result)?;
                 result.write_op(OpCode::MULTIPLY, self.lookup_source_line(left.start()));
             }
-            crate::parser::Expression::Divide { left: _, right: _ } => todo!(),
+            crate::parser::Expression::Divide { left, right } => {
+                self.compile_expr(&left.as_ref(), context, result)?;
+                self.compile_expr(&right.as_ref(), context, result)?;
+                result.write_op(OpCode::DIVIDE, self.lookup_source_line(left.start()));
+            }
             crate::parser::Expression::Add { left, right } => {
                 self.compile_expr(&left.as_ref(), context, result)?;
                 self.compile_expr(&right.as_ref(), context, result)?;
@@ -1265,6 +1281,20 @@ impl VirtualMachine {
                 self.compile_expr(&right, context, result)?;
                 self.compile_expr(&left, context, result)?;
                 result.write_op(OpCode::LESS, self.lookup_source_line(left.start()));
+            }
+            crate::parser::Expression::Logical(LogicalExpression::GreaterEqual { left, right }) => {
+                // a >= b is equivalent to !(a < b)
+                self.compile_expr(&right, context, result)?;
+                self.compile_expr(&left, context, result)?;
+                result.write_op(OpCode::LESS, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::NOT, self.lookup_source_line(left.start()));
+            }
+            crate::parser::Expression::Logical(LogicalExpression::LessEqual { left, right }) => {
+                // a <= b is equivalent to !(a > b)
+                self.compile_expr(&left, context, result)?;
+                self.compile_expr(&right, context, result)?;
+                result.write_op(OpCode::GREATER, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::NOT, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::Equal { left, right }) => {
                 self.compile_expr(&left, context, result)?;

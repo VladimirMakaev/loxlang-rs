@@ -179,6 +179,7 @@ pub enum OpCode {
     ADD,
     MULTIPLY,
     SUBTRACT,
+    DIVIDE,
     NEGATE,
     NOT,
     PRINT,
