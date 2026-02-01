@@ -230,6 +230,13 @@ impl VirtualMachine {
         self.heap.alloc(obj)
     }
 
+    /// Allocate a bound method on the heap.
+    pub fn alloc_bound_method(&mut self, receiver: Value, method: GcRef) -> GcRef {
+        self.maybe_collect();
+        let obj = Obj::bound_method(receiver, method);
+        self.heap.alloc(obj)
+    }
+
     /// Get a string value from a GcRef (panics if not a string).
     pub fn get_heap_string(&self, r: GcRef) -> &str {
         if let ObjKind::String(s) = &self.heap.get(r).kind {
@@ -263,6 +270,15 @@ impl VirtualMachine {
             u
         } else {
             panic!("Expected upvalue object")
+        }
+    }
+
+    /// Get a bound method from a GcRef (panics if not a bound method).
+    pub fn get_heap_bound_method(&self, r: GcRef) -> &ObjBoundMethod {
+        if let ObjKind::BoundMethod(bm) = &self.heap.get(r).kind {
+            bm
+        } else {
+            panic!("Expected bound method object")
         }
     }
 
@@ -1163,6 +1179,11 @@ impl VirtualMachine {
                             stacktrace: self.stacktrace(),
                         });
                     }
+                }
+                OpCode::METHOD(_name_const_idx) => {
+                    // TODO: Implement METHOD opcode in Plan 05-03
+                    // For now, this is a placeholder
+                    return Err(self.unhandled_error("METHOD opcode not yet implemented"));
                 }
             }
             self.frames[self.frame_idx].inc_ip(size);

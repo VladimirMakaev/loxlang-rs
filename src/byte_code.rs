@@ -84,7 +84,8 @@ impl ByteCode {
             | Some(OpCode::CLOSURE(idx))
             | Some(OpCode::CLASS(idx))
             | Some(OpCode::GET_PROPERTY(idx))
-            | Some(OpCode::SET_PROPERTY(idx)) => {
+            | Some(OpCode::SET_PROPERTY(idx))
+            | Some(OpCode::METHOD(idx)) => {
                 *idx = self.read_u16(ip);
                 3
             }
@@ -149,6 +150,7 @@ impl ByteCode {
             OpCode::CLASS(idx) => write_one_u16(&mut self.code, idx),
             OpCode::GET_PROPERTY(idx) => write_one_u16(&mut self.code, idx),
             OpCode::SET_PROPERTY(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::METHOD(idx) => write_one_u16(&mut self.code, idx),
             OpCode::JUMPIFFALSE(offset) | OpCode::JUMP(offset) | OpCode::LOOP(offset) => {
                 write_one_i16(&mut self.code, offset)
             }
@@ -198,6 +200,7 @@ pub enum OpCode {
     CLASS(u16),
     GET_PROPERTY(u16),
     SET_PROPERTY(u16),
+    METHOD(u16),
 }
 
 #[cfg(test)]
