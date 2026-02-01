@@ -1737,6 +1737,16 @@ impl UpvalueRef {
     }
 }
 
+/// Distinguishes different function compilation contexts.
+/// Used to handle slot 0 and return semantics correctly.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FunctionType {
+    Script,      // Top-level script
+    Function,    // Regular function declaration
+    Method,      // Class method
+    Initializer, // init() method
+}
+
 pub struct LexicalScope<'a> {
     parent: Option<Box<LexicalScope<'a>>>,
     args: Vec<(&'a str, bool)>,
@@ -1744,6 +1754,8 @@ pub struct LexicalScope<'a> {
     upvalues: Vec<(&'a str, UpvalueRef)>,
     block_depth: usize,
     name: Option<String>,
+    function_type: FunctionType,
+    enclosing_class: Option<bool>, // Some(true) if inside a class body
 }
 
 impl<'a> LexicalScope<'a> {
@@ -1763,10 +1775,13 @@ impl<'a> LexicalScope<'a> {
             block_depth: 0,
             upvalues: Default::default(),
             name: None,
+            function_type: FunctionType::Script,
+            enclosing_class: None,
         }
     }
 
     pub fn function_decl(&mut self, name: &'a str, args: impl IntoIterator<Item = &'a str>) {
+        let enclosing_class = self.enclosing_class;
         let new = Self {
             parent: None,
             args: {
@@ -1783,6 +1798,42 @@ impl<'a> LexicalScope<'a> {
                 .as_ref()
                 .map(|p_name| Some(format!("{}/{}", p_name, name)))
                 .unwrap_or_else(|| Some(name.to_owned())),
+            function_type: FunctionType::Function,
+            enclosing_class,
+        };
+
+        let prev = mem::replace(self, new);
+        self.parent = Some(Box::new(prev));
+    }
+
+    /// Enter a method compilation context.
+    /// Unlike function_decl, slot 0 is "this" instead of the function name.
+    pub fn method_decl(&mut self, name: &'a str, args: impl IntoIterator<Item = &'a str>, is_init: bool) {
+        let function_type = if is_init {
+            FunctionType::Initializer
+        } else {
+            FunctionType::Method
+        };
+
+        let new = Self {
+            parent: None,
+            args: {
+                let mut a = Vec::new();
+                // Slot 0 is "this" for methods (instead of function name)
+                a.push(("this", false));
+                a.extend(args.into_iter().map(|x| (x, false)));
+                a
+            },
+            block_depth: self.block_depth,
+            locals: Default::default(),
+            upvalues: Vec::with_capacity(self.locals.len() + self.upvalues.len()),
+            name: self
+                .name
+                .as_ref()
+                .map(|p_name| Some(format!("{}/{}", p_name, name)))
+                .unwrap_or_else(|| Some(name.to_owned())),
+            function_type,
+            enclosing_class: Some(true), // We are inside a class
         };
 
         let prev = mem::replace(self, new);
@@ -1798,6 +1849,8 @@ impl<'a> LexicalScope<'a> {
             parent,
             upvalues,
             name,
+            function_type,
+            enclosing_class,
         } = *parent;
         self.args = args;
         self.block_depth = block_depth;
@@ -1805,6 +1858,8 @@ impl<'a> LexicalScope<'a> {
         self.parent = parent;
         self.upvalues = upvalues;
         self.name = name;
+        self.function_type = function_type;
+        self.enclosing_class = enclosing_class;
     }
 
     pub fn enter_block(&mut self) {
