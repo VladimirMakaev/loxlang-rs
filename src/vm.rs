@@ -303,7 +303,13 @@ impl VirtualMachine {
             self.mark_value(value);
         }
 
-        // 4. Mark open upvalues (they point to ObjUpvalue on heap)
+        // 4. Mark call frame closures (CRITICAL - these are roots during execution)
+        let frame_closures: Vec<GcRef> = self.frames.iter().map(|f| f.closure).collect();
+        for closure_ref in frame_closures {
+            self.heap.mark_object(closure_ref);
+        }
+
+        // 5. Mark open upvalues (they point to ObjUpvalue on heap)
         let open_refs: Vec<GcRef> = self.open_upvalues.slots_to_values.values().copied().collect();
         for r in open_refs {
             self.heap.mark_object(r);
