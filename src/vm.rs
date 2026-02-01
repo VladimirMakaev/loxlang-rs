@@ -1683,6 +1683,16 @@ impl VirtualMachine {
                     self.lookup_source_line(expr.start()),
                 );
             }
+            Expression::This => {
+                // TODO: Implement This expression compilation in Plan 05-04
+                // For now, emit an error
+                return Err(VirtualMachineError::CompileError(vec![
+                    ParseError::UnexpectedToken {
+                        span: expr.span,
+                        expectation: "Can't use 'this' outside of a class.".to_owned(),
+                    },
+                ]));
+            }
         }
 
         Ok(())

@@ -207,6 +207,7 @@ pub enum Expression {
         name: String,
         value: Box<AstExpression>,
     },
+    This,
 }
 
 #[derive(Debug, strum::Display, strum::EnumTryAs)]
@@ -1097,6 +1098,11 @@ impl<'source> Parser<'source> {
         .ast(span))
     }
 
+    fn this_expression(&mut self) -> ExprResult {
+        let token = self.consume(TokenType::THIS)?;
+        Ok(Expression::This.ast(token.span()))
+    }
+
     fn precedence(
         token: TokenType,
     ) -> (
@@ -1165,6 +1171,7 @@ impl<'source> Parser<'source> {
             TokenType::FUN | TokenType::Comma | TokenType::RETURN => (None, None, Precedence::NONE),
             TokenType::Dot => (None, Some(Box::new(Self::dot)), Precedence::HIGHEST),
             TokenType::CLASS => (None, None, Precedence::NONE),
+            TokenType::THIS => (Some(Box::new(Self::this_expression)), None, Precedence::NONE),
             _ => panic!("Not implemented token: {:?}", token),
         }
     }
@@ -1259,6 +1266,7 @@ mod tests {
             Expression::Call { .. } => todo!(),
             Expression::GetProperty { .. } => todo!(),
             Expression::SetProperty { .. } => todo!(),
+            Expression::This => unimplemented!(),
         }
     }
 
