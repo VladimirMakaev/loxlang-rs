@@ -198,6 +198,15 @@ pub enum Expression {
         calee: Box<AstExpression>,
         arguments: Vec<AstExpression>,
     },
+    GetProperty {
+        object: Box<AstExpression>,
+        name: String,
+    },
+    SetProperty {
+        object: Box<AstExpression>,
+        name: String,
+        value: Box<AstExpression>,
+    },
 }
 
 #[derive(Debug, strum::Display, strum::EnumTryAs)]
@@ -243,6 +252,7 @@ pub enum StmtDeclaration {
         expr: Option<AstExpression>,
     },
     Function(FunDeclaration),
+    Class(ClassDeclaration),
 }
 
 #[derive(Debug)]
@@ -250,6 +260,12 @@ pub struct FunDeclaration {
     pub(crate) name: AstIdent,
     pub(crate) params: Vec<AstIdent>,
     pub(crate) body: Box<AstStmt>,
+}
+
+#[derive(Debug)]
+pub struct ClassDeclaration {
+    pub(crate) name: AstIdent,
+    // Methods added in Phase 5
 }
 
 pub struct Parser<'source> {
@@ -390,6 +406,11 @@ impl<'source> Parser<'source> {
         if self.check_token(TokenType::FUN)? {
             return self.fun_declaration();
         }
+
+        if self.check_token(TokenType::CLASS)? {
+            return self.class_declaration();
+        }
+
         self.statement()
     }
 
@@ -445,6 +466,30 @@ impl<'source> Parser<'source> {
                 name,
                 params: params,
                 body: Box::new(block),
+            }))
+            .ast(span),
+        )
+    }
+
+    fn class_declaration(&mut self) -> StmtResult {
+        let class_token = self.consume(TokenType::CLASS)?;
+        let name = self.consume(TokenType::IDENTIFIER)?;
+        let name = name.slice(self.code).to_owned().ast(name.span());
+
+        self.consume(TokenType::LeftBrace)?;
+
+        // Skip method parsing (Phase 5) - just consume until RightBrace
+        while !self.check_token(TokenType::RightBrace)? {
+            // Consume any tokens inside the class body
+            self.consume_next()?;
+        }
+
+        let right_brace = self.consume(TokenType::RightBrace)?;
+        let span = Span::new(class_token.start(), right_brace.end());
+
+        Ok(
+            Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration {
+                name,
             }))
             .ast(span),
         )
@@ -1034,6 +1079,7 @@ impl<'source> Parser<'source> {
             TokenType::OR => (None, Some(Box::new(Self::logical_or)), Precedence::AND),
             TokenType::FUN | TokenType::Comma | TokenType::RETURN => (None, None, Precedence::NONE),
             TokenType::Dot => (None, None, Precedence::NONE),
+            TokenType::CLASS => (None, None, Precedence::NONE),
             _ => panic!("Not implemented token: {:?}", token),
         }
     }
@@ -1126,6 +1172,8 @@ mod tests {
             Expression::Identier(_) => todo!(),
             Expression::Assignment { .. } => todo!(),
             Expression::Call { .. } => todo!(),
+            Expression::GetProperty { .. } => todo!(),
+            Expression::SetProperty { .. } => todo!(),
         }
     }
 

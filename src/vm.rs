@@ -18,7 +18,7 @@ use crate::{
     interner::{DefaultInterner, DefaultStringTable, Interner, StringTable, StrId},
     object::{Obj, ObjClosure, ObjFunction, ObjKind, ObjUpvalue, UpvalueLocation},
     parser::{
-        AstExpression, AstIdent, AstStmt, Expression, ForStmt, FunDeclaration, IfStmt,
+        AstExpression, AstIdent, AstStmt, ClassDeclaration, Expression, ForStmt, FunDeclaration, IfStmt,
         LogicalExpression, ParseError, Parser, Span, StmtDeclaration, WhileStmt,
     },
     value::{Value, ValueTypes},
@@ -1019,6 +1019,25 @@ impl VirtualMachine {
                     self.close_upvalues(slot);
                     self.pop()?;
                 }
+                OpCode::CLASS(name_const_idx) => {
+                    // Get class name GcRef from constants table
+                    let name_value = &self.constants[name_const_idx as usize];
+                    let name_ref = match name_value {
+                        Value::Object(r) => *r,
+                        _ => return Err(self.unhandled_error("Expected string object in constants")),
+                    };
+
+                    debug!(
+                        "@{at} CLASS {name} [line: {line}]",
+                        at = self.ip(),
+                        name = self.get_heap_string(name_ref),
+                        line = self.current_line()
+                    );
+
+                    // Create class object and push to stack
+                    let class_ref = self.alloc_class(name_ref);
+                    self.push(Value::Object(class_ref));
+                }
             }
             self.frames[self.frame_idx].inc_ip(size);
         }
@@ -1123,6 +1142,18 @@ impl VirtualMachine {
                     result.write_op(OpCode::NIL, self.lookup_source_line(ident.start()));
                 }
                 self.compile_declaration_from_stack(ident, context, result)
+            }
+            crate::parser::Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration { name })) => {
+                // Emit CLASS opcode with name constant index
+                let name_ref = self.alloc_string(name.node.clone());
+                let name_const_idx = self.constants.len() as u16;
+                self.constants.push(Value::Object(name_ref));
+                result.write_op(
+                    OpCode::CLASS(name_const_idx),
+                    self.lookup_source_line(name.start()),
+                );
+                // Define class as variable (same as functions)
+                self.compile_declaration_from_stack(name, context, result)
             }
             crate::parser::Stmt::Block(block) => {
                 context.enter_block();
@@ -1476,6 +1507,14 @@ impl VirtualMachine {
                     OpCode::CALL(arguments.len() as u8),
                     self.lookup_source_line(calee.start()),
                 )
+            }
+            crate::parser::Expression::GetProperty { .. } => {
+                // Property get compilation will be implemented in 04-04
+                todo!("GetProperty bytecode emission")
+            }
+            crate::parser::Expression::SetProperty { .. } => {
+                // Property set compilation will be implemented in 04-04
+                todo!("SetProperty bytecode emission")
             }
         }
 

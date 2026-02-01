@@ -81,7 +81,8 @@ impl ByteCode {
             }
             Some(OpCode::GETUPVALUE(idx))
             | Some(OpCode::SETUPVALUE(idx))
-            | Some(OpCode::CLOSURE(idx)) => {
+            | Some(OpCode::CLOSURE(idx))
+            | Some(OpCode::CLASS(idx)) => {
                 *idx = self.read_u16(ip);
                 3
             }
@@ -143,6 +144,7 @@ impl ByteCode {
             OpCode::SETLOCAL(idx) | OpCode::GETLOCAL(idx) => write_one_u16(&mut self.code, idx),
             OpCode::GETUPVALUE(idx) | OpCode::SETUPVALUE(idx) => write_one_u16(&mut self.code, idx),
             OpCode::CLOSURE(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::CLASS(idx) => write_one_u16(&mut self.code, idx),
             OpCode::JUMPIFFALSE(offset) | OpCode::JUMP(offset) | OpCode::LOOP(offset) => {
                 write_one_i16(&mut self.code, offset)
             }
@@ -189,6 +191,7 @@ pub enum OpCode {
     GREATER,
     LESS,
     EQUAL,
+    CLASS(u16),
 }
 
 #[cfg(test)]
