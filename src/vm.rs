@@ -901,15 +901,15 @@ impl VirtualMachine {
                         line = self.current_line(),
                         value = self.as_display(self.stack.last().cloned().unwrap()),
                     );
-                    let upvalue =
-                        self.open_upvalues
-                            .take(self.stack.len() - 1)
-                            .ok_or_else(|| {
-                                self.unhandled_error("Upvalue expected to exist for slot")
-                            })?;
 
-                    let stack_value = self.pop()?;
-                    upvalue.close(self, stack_value);
+                    // Guard against phantom upvalues - closure may have been defined but never executed
+                    if let Some(upvalue) = self.open_upvalues.take(self.stack.len() - 1) {
+                        let stack_value = self.pop()?;
+                        upvalue.close(self, stack_value);
+                    } else {
+                        // Closure was never executed, just pop the local
+                        self.pop()?;
+                    }
                 }
             }
             self.frames[self.frame_idx].inc_ip(size);
