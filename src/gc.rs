@@ -93,6 +93,67 @@ impl Heap {
             .map(|o| o.is_some())
             .unwrap_or(false)
     }
+
+    /// Process gray stack until empty, marking all reachable objects
+    pub fn trace_references(&mut self) {
+        while let Some(idx) = self.gray_stack.pop() {
+            self.blacken_object(GcRef(idx));
+        }
+    }
+
+    /// Mark all references from object (turn gray to black)
+    fn blacken_object(&mut self, r: GcRef) {
+        // Get references first to avoid borrow conflict
+        let refs: Vec<GcRef> = match &self.objects[r.0 as usize] {
+            Some(obj) => obj.kind.get_references(),
+            None => return,
+        };
+
+        for child_ref in refs {
+            self.mark_object(child_ref);
+        }
+    }
+
+    /// Free unmarked objects and recycle slots
+    pub fn sweep(&mut self) {
+        for idx in 0..self.objects.len() {
+            if let Some(obj) = &mut self.objects[idx] {
+                if obj.is_marked {
+                    // Reset mark for next cycle
+                    obj.is_marked = false;
+                } else {
+                    // Free this object
+                    self.bytes_allocated = self.bytes_allocated.saturating_sub(obj.size());
+                    self.objects[idx] = None;
+                    self.free_list.push(idx as u32);
+                }
+            }
+        }
+    }
+
+    /// Update threshold after collection
+    pub fn update_threshold(&mut self) {
+        // Grow threshold: next GC at 2x current allocation
+        const GC_HEAP_GROW_FACTOR: usize = 2;
+        self.next_gc = self.bytes_allocated * GC_HEAP_GROW_FACTOR;
+        // Minimum threshold to avoid constant collection
+        if self.next_gc < 1024 * 1024 {
+            self.next_gc = 1024 * 1024;
+        }
+    }
+
+    /// Check if an object is marked (for string table cleanup)
+    pub fn is_marked(&self, r: GcRef) -> bool {
+        self.objects[r.0 as usize]
+            .as_ref()
+            .map(|obj| obj.is_marked)
+            .unwrap_or(false)
+    }
+
+    /// Reset gray stack for new collection cycle
+    pub fn reset_gray_stack(&mut self) {
+        self.gray_stack.clear();
+    }
 }
 
 impl Default for Heap {
@@ -119,5 +180,25 @@ mod tests {
         } else {
             panic!("Expected string object");
         }
+    }
+
+    #[test]
+    fn test_sweep_unmarked() {
+        let mut heap = Heap::new();
+
+        // Allocate two objects
+        let r1 = heap.alloc(Obj::string("keep".to_string(), 1));
+        let r2 = heap.alloc(Obj::string("sweep".to_string(), 2));
+
+        // Mark only r1
+        heap.mark_object(r1);
+        heap.trace_references();
+
+        // Sweep
+        heap.sweep();
+
+        // r1 should still be valid, r2 should be freed
+        assert!(heap.is_valid(r1));
+        assert!(!heap.is_valid(r2));
     }
 }
