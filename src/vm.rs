@@ -918,6 +918,44 @@ impl VirtualMachine {
                                 self.stack[stack_pos] = Value::Object(instance_ref);
                                 // No call frame needed - continue execution
                             }
+                            ObjKind::BoundMethod(bound) => {
+                                // Replace callee slot with receiver (becomes slot 0 / 'this')
+                                let receiver = bound.receiver.clone();
+                                let method_ref = bound.method;
+                                let stack_pos = self.stack.len() - arg_count - 1;
+                                self.stack[stack_pos] = receiver;
+
+                                // Get closure and function for arity check
+                                let closure = self.get_heap_closure(method_ref);
+                                let function = self.get_heap_function(closure.function);
+
+                                if function.arity != arg_count {
+                                    return Err(VirtualMachineError::RuntimeError {
+                                        kind: RuntimeErrorKind::InvalidFunArity {
+                                            got: arg_count,
+                                            expected: function.arity,
+                                        },
+                                        stacktrace: self.stacktrace(),
+                                    });
+                                }
+
+                                // Check stack overflow
+                                if self.frames.len() >= FRAMES_MAX {
+                                    return Err(VirtualMachineError::RuntimeError {
+                                        kind: RuntimeErrorKind::StackOverflow,
+                                        stacktrace: self.stacktrace(),
+                                    });
+                                }
+
+                                // Push call frame
+                                self.frames.push(CallFrame {
+                                    ip: 0,
+                                    closure: method_ref,
+                                    locals_idx: stack_pos,
+                                });
+                                self.frame_idx += 1;
+                                continue;
+                            }
                             _ => {
                                 return Err(VirtualMachineError::RuntimeError {
                                     kind: RuntimeErrorKind::InvalidCallee,
