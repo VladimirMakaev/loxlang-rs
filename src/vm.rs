@@ -1633,7 +1633,14 @@ impl<'a> Display for DisplayError<'a> {
 impl<'a> Display for DispayValue<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.value {
-            Value::Number(x) => write!(f, "{}", x),
+            Value::Number(x) => {
+                // Match clox %g behavior: integers print without decimal point
+                if x.fract() == 0.0 && x.abs() < 1e15 {
+                    write!(f, "{}", x as i64)
+                } else {
+                    write!(f, "{}", x)
+                }
+            }
             Value::Bool(x) => write!(f, "{}", x),
             Value::Nil => f.write_str("nil"),
             Value::String(str_id) => f.write_str(self.vm.interner.get_str(str_id)),
