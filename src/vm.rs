@@ -1180,10 +1180,42 @@ impl VirtualMachine {
                         });
                     }
                 }
-                OpCode::METHOD(_name_const_idx) => {
-                    // TODO: Implement METHOD opcode in Plan 05-03
-                    // For now, this is a placeholder
-                    return Err(self.unhandled_error("METHOD opcode not yet implemented"));
+                OpCode::METHOD(name_const_idx) => {
+                    // Get method name GcRef from constants table
+                    let name_value = &self.constants[name_const_idx as usize];
+                    let name_ref = match name_value {
+                        Value::Object(r) => *r,
+                        _ => return Err(self.unhandled_error("Expected string object in constants")),
+                    };
+
+                    debug!(
+                        "@{at} METHOD {name} [line: {line}]",
+                        at = self.ip(),
+                        name = self.get_heap_string(name_ref),
+                        line = self.current_line()
+                    );
+
+                    // Pop closure from stack
+                    let closure_value = self.pop()?;
+                    let closure_ref = match closure_value {
+                        Value::Object(r) => r,
+                        _ => return Err(self.unhandled_error("Expected closure object")),
+                    };
+
+                    // Pop class from stack (METHOD pops class after adding method)
+                    let class_value = self.pop()?;
+                    let class_ref = match class_value {
+                        Value::Object(r) => r,
+                        _ => return Err(self.unhandled_error("Expected class object")),
+                    };
+
+                    // Add method to class
+                    let obj = self.heap.get_mut(class_ref);
+                    if let ObjKind::Class(class) = &mut obj.kind {
+                        class.methods.insert(name_ref, closure_ref);
+                    } else {
+                        return Err(self.unhandled_error("Expected class object"));
+                    }
                 }
             }
             self.frames[self.frame_idx].inc_ip(size);
@@ -1290,7 +1322,7 @@ impl VirtualMachine {
                 }
                 self.compile_declaration_from_stack(ident, context, result)
             }
-            crate::parser::Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration { name, .. })) => {
+            crate::parser::Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration { name, methods })) => {
                 // Emit CLASS opcode with name constant index
                 let name_ref = self.alloc_string(name.node.clone());
                 let name_const_idx = self.constants.len() as u16;
@@ -1300,7 +1332,79 @@ impl VirtualMachine {
                     self.lookup_source_line(name.start()),
                 );
                 // Define class as variable (same as functions)
-                self.compile_declaration_from_stack(name, context, result)
+                self.compile_declaration_from_stack(name, context, result)?;
+
+                // Compile each method
+                for method in methods {
+                    // Load class back onto stack for METHOD opcode
+                    if context.is_toplevel() {
+                        let class_name_idx = self.interner.intern_str(name.node());
+                        result.write_op(
+                            OpCode::GETGLOBAL(class_name_idx),
+                            self.lookup_source_line(method.name.start()),
+                        );
+                    } else {
+                        // Class is a local variable
+                        if let Some(offset) = context.resolve_local(name.node()) {
+                            result.write_op(
+                                OpCode::GETLOCAL(offset as u16),
+                                self.lookup_source_line(method.name.start()),
+                            );
+                        }
+                    }
+
+                    // Compile the method body
+                    let is_init = method.name.node() == "init";
+                    let mut byte_code = ByteCode::default();
+                    context.method_decl(
+                        method.name.node(),
+                        method.params.iter().map(|x| x.node().as_str()),
+                        is_init,
+                    );
+
+                    self.compile_statement(&method.body, context, &mut byte_code)?;
+
+                    // Emit implicit return (NIL + RET for regular methods, init handled in Plan 06)
+                    byte_code.write_op(OpCode::NIL, self.lookup_source_line(method.body.end()));
+                    byte_code.write_op(OpCode::RET, self.lookup_source_line(method.body.end()));
+
+                    let upvalue_count = context.upvalues.len();
+
+                    // Create function on heap
+                    let method_name_ref = self.alloc_string(method.name.node.clone());
+                    let function_ref = self.alloc_function(
+                        method_name_ref,
+                        method.params.len(),
+                        byte_code,
+                        upvalue_count,
+                    );
+
+                    // Store function ref in constants table and use index in CLOSURE opcode
+                    let function_const_idx = self.constants.len() as u16;
+                    self.constants.push(Value::Object(function_ref));
+
+                    result.write_op(
+                        OpCode::CLOSURE(function_const_idx),
+                        self.lookup_source_line(method.name.start()),
+                    );
+                    for (_, up) in context.upvalues.iter() {
+                        up.write_to(result, self.lookup_source_line(method.name.start()));
+                    }
+                    context.leave_function();
+
+                    // Allocate method name string for METHOD opcode
+                    let method_name_const_ref = self.alloc_string(method.name.node.clone());
+                    let method_name_const_idx = self.constants.len() as u16;
+                    self.constants.push(Value::Object(method_name_const_ref));
+
+                    // Emit METHOD opcode
+                    result.write_op(
+                        OpCode::METHOD(method_name_const_idx),
+                        self.lookup_source_line(method.name.start()),
+                    );
+                }
+
+                Ok(())
             }
             crate::parser::Stmt::Block(block) => {
                 context.enter_block();
