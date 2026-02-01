@@ -57,6 +57,12 @@ pub enum ParseError {
     MaxFunDeclarationParameters { span: Span },
     #[error("Can't return a value from an initializer.")]
     InitializerReturnValue { span: Span },
+    #[error("A class can't inherit from itself.")]
+    InheritFromSelf { span: Span },
+    #[error("Can't use 'super' outside of a class.")]
+    SuperOutsideClass { span: Span },
+    #[error("Can't use 'super' in a class with no superclass.")]
+    SuperWithoutSuperclass { span: Span },
 }
 
 impl Into<Vec<ParseError>> for ParseError {
@@ -268,6 +274,7 @@ pub struct FunDeclaration {
 #[derive(Debug)]
 pub struct ClassDeclaration {
     pub(crate) name: AstIdent,
+    pub(crate) superclass: Option<AstIdent>,
     pub(crate) methods: Vec<MethodDeclaration>,
 }
 
@@ -486,6 +493,22 @@ impl<'source> Parser<'source> {
         let name = self.consume(TokenType::IDENTIFIER)?;
         let name = name.slice(self.code).to_owned().ast(name.span());
 
+        // Parse optional superclass
+        let superclass = if self.check_token(TokenType::LESS)? {
+            self.consume(TokenType::LESS)?;
+            let super_name = self.consume(TokenType::IDENTIFIER)?;
+            let super_ident = super_name.slice(self.code).to_owned().ast(super_name.span());
+
+            // Check for self-inheritance
+            if super_ident.node == name.node {
+                return Err(ParseError::InheritFromSelf { span: super_name.span() }.into());
+            }
+
+            Some(super_ident)
+        } else {
+            None
+        };
+
         self.consume(TokenType::LeftBrace)?;
 
         let mut methods = Vec::new();
@@ -499,6 +522,7 @@ impl<'source> Parser<'source> {
         Ok(
             Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration {
                 name,
+                superclass,
                 methods,
             }))
             .ast(span),
