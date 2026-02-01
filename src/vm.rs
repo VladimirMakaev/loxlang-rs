@@ -1023,7 +1023,8 @@ impl VirtualMachine {
                     );
 
                     // Close any open upvalues for locals that are about to be popped
-                    self.close_upvalues(self.locals_idx() + 1);
+                    // (including slot 0 which is 'this' for methods or function name for functions)
+                    self.close_upvalues(self.locals_idx());
 
                     self.stack.truncate(self.frames[self.frame_idx].locals_idx);
                     self.frames.pop();
