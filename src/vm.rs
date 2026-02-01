@@ -1489,8 +1489,55 @@ impl VirtualMachine {
                     }
                 }
                 OpCode::INHERIT => {
-                    // Placeholder: Inheritance implementation in Phase 6-03
-                    todo!("INHERIT opcode not yet implemented")
+                    // Stack: [..., superclass, subclass]
+                    let subclass_value = self.pop()?;
+                    let superclass_value = self.peek()?;  // Leave on stack for "super" local
+
+                    // Validate superclass is a class
+                    let superclass_ref = match &superclass_value {
+                        Value::Object(r) => *r,
+                        _ => {
+                            return Err(VirtualMachineError::RuntimeError {
+                                kind: RuntimeErrorKind::Unexpected {
+                                    error: anyhow::anyhow!("Superclass must be a class."),
+                                },
+                                stacktrace: self.stacktrace(),
+                            });
+                        }
+                    };
+
+                    if !matches!(self.heap.get(superclass_ref).kind, ObjKind::Class(_)) {
+                        return Err(VirtualMachineError::RuntimeError {
+                            kind: RuntimeErrorKind::Unexpected {
+                                error: anyhow::anyhow!("Superclass must be a class."),
+                            },
+                            stacktrace: self.stacktrace(),
+                        });
+                    }
+
+                    // Copy methods from superclass to subclass
+                    let methods_to_copy: Vec<(GcRef, GcRef)> = {
+                        if let ObjKind::Class(superclass) = &self.heap.get(superclass_ref).kind {
+                            superclass.methods.iter().map(|(k, v)| (*k, *v)).collect()
+                        } else {
+                            vec![]
+                        }
+                    };
+
+                    let subclass_ref = match subclass_value {
+                        Value::Object(r) => r,
+                        _ => {
+                            return Err(self.unhandled_error("Expected class object"));
+                        }
+                    };
+
+                    let subclass = self.heap.get_mut(subclass_ref);
+                    if let ObjKind::Class(class) = &mut subclass.kind {
+                        for (name, method) in methods_to_copy {
+                            // Only insert if subclass doesn't already have this method
+                            class.methods.entry(name).or_insert(method);
+                        }
+                    }
                 }
                 OpCode::GET_SUPER(_) => {
                     // Placeholder: Super method lookup in Phase 6-05
@@ -1605,7 +1652,8 @@ impl VirtualMachine {
                 }
                 self.compile_declaration_from_stack(ident, context, result)
             }
-            crate::parser::Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration { name, methods, .. })) => {
+            crate::parser::Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration { name, methods, superclass })) => {
+                let has_superclass = superclass.is_some();
                 // Emit CLASS opcode with name constant index
                 let name_ref = self.alloc_string(name.node.clone());
                 let name_const_idx = self.constants.len() as u16;
@@ -1643,6 +1691,7 @@ impl VirtualMachine {
                         method.name.node(),
                         method.params.iter().map(|x| x.node().as_str()),
                         is_init,
+                        has_superclass,
                     );
 
                     self.compile_statement(&method.body, context, &mut byte_code)?;
@@ -2110,7 +2159,7 @@ impl VirtualMachine {
                 let line = self.lookup_source_line(expr.start());
 
                 // Check if inside a class
-                if context.enclosing_class.is_none() {
+                if !context.in_class() {
                     return Err(VirtualMachineError::CompileError(vec![
                         ParseError::UnexpectedToken {
                             span: expr.span,
@@ -2183,6 +2232,12 @@ pub enum FunctionType {
     Initializer, // init() method
 }
 
+/// Context for tracking class compilation state
+#[derive(Clone, Copy, Debug)]
+pub struct ClassContext {
+    pub has_superclass: bool,
+}
+
 pub struct LexicalScope<'a> {
     parent: Option<Box<LexicalScope<'a>>>,
     args: Vec<(&'a str, bool)>,
@@ -2191,7 +2246,7 @@ pub struct LexicalScope<'a> {
     block_depth: usize,
     name: Option<String>,
     function_type: FunctionType,
-    enclosing_class: Option<bool>, // Some(true) if inside a class body
+    enclosing_class: Option<ClassContext>, // Some if inside a class body
 }
 
 impl<'a> LexicalScope<'a> {
@@ -2248,7 +2303,7 @@ impl<'a> LexicalScope<'a> {
 
     /// Enter a method compilation context.
     /// Unlike function_decl, slot 0 is "this" instead of the function name.
-    pub fn method_decl(&mut self, name: &'a str, args: impl IntoIterator<Item = &'a str>, is_init: bool) {
+    pub fn method_decl(&mut self, name: &'a str, args: impl IntoIterator<Item = &'a str>, is_init: bool, has_superclass: bool) {
         let function_type = if is_init {
             FunctionType::Initializer
         } else {
@@ -2273,11 +2328,26 @@ impl<'a> LexicalScope<'a> {
                 .map(|p_name| Some(format!("{}/{}", p_name, name)))
                 .unwrap_or_else(|| Some(name.to_owned())),
             function_type,
-            enclosing_class: Some(true), // We are inside a class
+            enclosing_class: Some(ClassContext { has_superclass }),
         };
 
         let prev = mem::replace(self, new);
         self.parent = Some(Box::new(prev));
+    }
+
+    /// Check if currently inside a class body
+    pub fn in_class(&self) -> bool {
+        self.enclosing_class.is_some()
+    }
+
+    /// Check if the enclosing class has a superclass
+    pub fn has_superclass(&self) -> bool {
+        self.enclosing_class.map_or(false, |ctx| ctx.has_superclass)
+    }
+
+    /// Set the class context for method compilation
+    pub fn set_class_context(&mut self, has_superclass: bool) {
+        self.enclosing_class = Some(ClassContext { has_superclass });
     }
 
     pub fn leave_function(&mut self) {
