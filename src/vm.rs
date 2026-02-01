@@ -900,10 +900,50 @@ impl VirtualMachine {
                                 self.frame_idx += 1;
                                 continue;
                             }
-                            ObjKind::Class(_) => {
-                                // No initializer yet (Phase 5 will add init support)
-                                // For now, classes take 0 arguments
-                                if arg_count != 0 {
+                            ObjKind::Class(class) => {
+                                // Extract methods for init lookup before mutable borrow
+                                let methods = class.methods.clone();
+
+                                // Create instance and replace class on stack at callee position
+                                let instance_ref = self.alloc_instance(obj_ref);
+                                let stack_pos = self.stack.len() - arg_count - 1;
+                                self.stack[stack_pos] = Value::Object(instance_ref);
+
+                                // Look up init method
+                                let init_name = self.alloc_string("init".to_string());
+                                if let Some(&init_ref) = methods.get(&init_name) {
+                                    // Get closure and function for arity check
+                                    let closure = self.get_heap_closure(init_ref);
+                                    let function = self.get_heap_function(closure.function);
+
+                                    if function.arity != arg_count {
+                                        return Err(VirtualMachineError::RuntimeError {
+                                            kind: RuntimeErrorKind::InvalidFunArity {
+                                                got: arg_count,
+                                                expected: function.arity,
+                                            },
+                                            stacktrace: self.stacktrace(),
+                                        });
+                                    }
+
+                                    // Check stack overflow
+                                    if self.frames.len() >= FRAMES_MAX {
+                                        return Err(VirtualMachineError::RuntimeError {
+                                            kind: RuntimeErrorKind::StackOverflow,
+                                            stacktrace: self.stacktrace(),
+                                        });
+                                    }
+
+                                    // Push call frame for init
+                                    self.frames.push(CallFrame {
+                                        ip: 0,
+                                        closure: init_ref,
+                                        locals_idx: stack_pos,
+                                    });
+                                    self.frame_idx += 1;
+                                    continue;
+                                } else if arg_count != 0 {
+                                    // No init method but arguments provided
                                     return Err(VirtualMachineError::RuntimeError {
                                         kind: RuntimeErrorKind::InvalidFunArity {
                                             got: arg_count,
@@ -912,11 +952,7 @@ impl VirtualMachine {
                                         stacktrace: self.stacktrace(),
                                     });
                                 }
-                                // Create instance and replace class on stack
-                                let instance_ref = self.alloc_instance(obj_ref);
-                                let stack_pos = self.stack.len() - 1;
-                                self.stack[stack_pos] = Value::Object(instance_ref);
-                                // No call frame needed - continue execution
+                                // No init and no args - instance is ready on stack
                             }
                             ObjKind::BoundMethod(bound) => {
                                 // Replace callee slot with receiver (becomes slot 0 / 'this')
@@ -1273,9 +1309,175 @@ impl VirtualMachine {
                         return Err(self.unhandled_error("Expected class object"));
                     }
                 }
-                OpCode::INVOKE(_name_idx, _arg_count) => {
-                    // TODO: Implement in Task 3
-                    unimplemented!("INVOKE opcode not yet implemented");
+                OpCode::INVOKE(name_idx, arg_count) => {
+                    let arg_count = arg_count as usize;
+
+                    // Get method name from constants
+                    let name_ref = match &self.constants[name_idx as usize] {
+                        Value::Object(r) => *r,
+                        _ => return Err(self.unhandled_error("Expected string constant for INVOKE")),
+                    };
+
+                    debug!(
+                        "@{at} INVOKE {name}({arg_count}) [line: {line}]",
+                        at = self.ip(),
+                        name = self.get_heap_string(name_ref),
+                        line = self.current_line()
+                    );
+
+                    // Get receiver from stack (before args)
+                    let receiver_pos = self.stack.len() - arg_count - 1;
+                    let receiver = self.stack[receiver_pos].clone();
+
+                    if let Value::Object(obj_ref) = receiver {
+                        let obj = self.heap.get(obj_ref);
+                        if let ObjKind::Instance(instance) = &obj.kind {
+                            // Check field first (field can shadow method and be callable)
+                            if let Some(field_value) = instance.fields.get(&name_ref).cloned() {
+                                // Field found - replace receiver with field value and call it
+                                self.stack[receiver_pos] = field_value.clone();
+                                self.frames[self.frame_idx].inc_ip(size);
+
+                                // Call the field value (delegate to existing call logic)
+                                match &field_value {
+                                    Value::Object(field_obj_ref) => {
+                                        match &self.heap.get(*field_obj_ref).kind {
+                                            ObjKind::Closure(closure) => {
+                                                let function = self.get_heap_function(closure.function);
+                                                if function.arity != arg_count {
+                                                    return Err(VirtualMachineError::RuntimeError {
+                                                        kind: RuntimeErrorKind::InvalidFunArity {
+                                                            got: arg_count,
+                                                            expected: function.arity,
+                                                        },
+                                                        stacktrace: self.stacktrace(),
+                                                    });
+                                                }
+                                                if self.frames.len() >= FRAMES_MAX {
+                                                    return Err(VirtualMachineError::RuntimeError {
+                                                        kind: RuntimeErrorKind::StackOverflow,
+                                                        stacktrace: self.stacktrace(),
+                                                    });
+                                                }
+                                                self.frames.push(CallFrame {
+                                                    ip: 0,
+                                                    closure: *field_obj_ref,
+                                                    locals_idx: receiver_pos,
+                                                });
+                                                self.frame_idx += 1;
+                                                continue;
+                                            }
+                                            ObjKind::BoundMethod(bound) => {
+                                                // Field is a bound method
+                                                let bound_receiver = bound.receiver.clone();
+                                                let method_ref = bound.method;
+                                                self.stack[receiver_pos] = bound_receiver;
+
+                                                let closure = self.get_heap_closure(method_ref);
+                                                let function = self.get_heap_function(closure.function);
+
+                                                if function.arity != arg_count {
+                                                    return Err(VirtualMachineError::RuntimeError {
+                                                        kind: RuntimeErrorKind::InvalidFunArity {
+                                                            got: arg_count,
+                                                            expected: function.arity,
+                                                        },
+                                                        stacktrace: self.stacktrace(),
+                                                    });
+                                                }
+                                                if self.frames.len() >= FRAMES_MAX {
+                                                    return Err(VirtualMachineError::RuntimeError {
+                                                        kind: RuntimeErrorKind::StackOverflow,
+                                                        stacktrace: self.stacktrace(),
+                                                    });
+                                                }
+                                                self.frames.push(CallFrame {
+                                                    ip: 0,
+                                                    closure: method_ref,
+                                                    locals_idx: receiver_pos,
+                                                });
+                                                self.frame_idx += 1;
+                                                continue;
+                                            }
+                                            _ => {
+                                                return Err(VirtualMachineError::RuntimeError {
+                                                    kind: RuntimeErrorKind::InvalidCallee,
+                                                    stacktrace: self.stacktrace(),
+                                                });
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        return Err(VirtualMachineError::RuntimeError {
+                                            kind: RuntimeErrorKind::InvalidCallee,
+                                            stacktrace: self.stacktrace(),
+                                        });
+                                    }
+                                }
+                            } else {
+                                // Field not found, check class methods
+                                let klass_ref = instance.klass;
+                                let klass_obj = self.heap.get(klass_ref);
+                                if let ObjKind::Class(class) = &klass_obj.kind {
+                                    if let Some(&method_ref) = class.methods.get(&name_ref) {
+                                        // Direct method call - instance stays at receiver_pos (becomes this)
+                                        let closure = self.get_heap_closure(method_ref);
+                                        let function = self.get_heap_function(closure.function);
+
+                                        if function.arity != arg_count {
+                                            return Err(VirtualMachineError::RuntimeError {
+                                                kind: RuntimeErrorKind::InvalidFunArity {
+                                                    got: arg_count,
+                                                    expected: function.arity,
+                                                },
+                                                stacktrace: self.stacktrace(),
+                                            });
+                                        }
+                                        if self.frames.len() >= FRAMES_MAX {
+                                            return Err(VirtualMachineError::RuntimeError {
+                                                kind: RuntimeErrorKind::StackOverflow,
+                                                stacktrace: self.stacktrace(),
+                                            });
+                                        }
+                                        self.frames.push(CallFrame {
+                                            ip: 0,
+                                            closure: method_ref,
+                                            locals_idx: receiver_pos,
+                                        });
+                                        self.frame_idx += 1;
+                                        continue;
+                                    } else {
+                                        // Neither field nor method found
+                                        let name = self.get_heap_string(name_ref).to_string();
+                                        return Err(VirtualMachineError::RuntimeError {
+                                            kind: RuntimeErrorKind::Unexpected {
+                                                error: anyhow::Error::msg(format!("Undefined property '{}'.", name)),
+                                            },
+                                            stacktrace: self.stacktrace(),
+                                        });
+                                    }
+                                } else {
+                                    return Err(self.unhandled_error("Instance's klass is not a class"));
+                                }
+                            }
+                        } else {
+                            // Not an instance
+                            return Err(VirtualMachineError::RuntimeError {
+                                kind: RuntimeErrorKind::Unexpected {
+                                    error: anyhow::Error::msg("Only instances have properties."),
+                                },
+                                stacktrace: self.stacktrace(),
+                            });
+                        }
+                    } else {
+                        // Not an object
+                        return Err(VirtualMachineError::RuntimeError {
+                            kind: RuntimeErrorKind::Unexpected {
+                                error: anyhow::Error::msg("Only instances have properties."),
+                            },
+                            stacktrace: self.stacktrace(),
+                        });
+                    }
                 }
             }
             self.frames[self.frame_idx].inc_ip(size);
@@ -2276,6 +2478,9 @@ impl<'a> Display for DisplayError<'a> {
                             Self::report_error_with_span(self.code, self.codemap, f, span, error)?
                         }
                         ParseError::MaxFunDeclarationParameters { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::InitializerReturnValue { span } => {
                             Self::report_error_with_span(self.code, self.codemap, f, span, error)?
                         }
                         ParseError::UnexpectedEof { last_position } => {
