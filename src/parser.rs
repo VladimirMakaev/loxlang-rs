@@ -55,6 +55,8 @@ pub enum ParseError {
     MaxFunCallArguments { span: Span },
     #[error("Can't have more than 255 parameters.")]
     MaxFunDeclarationParameters { span: Span },
+    #[error("Can't return a value from an initializer.")]
+    InitializerReturnValue { span: Span },
 }
 
 impl Into<Vec<ParseError>> for ParseError {

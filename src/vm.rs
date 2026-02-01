@@ -1424,8 +1424,14 @@ impl VirtualMachine {
 
                     self.compile_statement(&method.body, context, &mut byte_code)?;
 
-                    // Emit implicit return (NIL + RET for regular methods, init handled in Plan 06)
-                    byte_code.write_op(OpCode::NIL, self.lookup_source_line(method.body.end()));
+                    // Emit implicit return
+                    // For initializers: return 'this' (slot 0)
+                    // For regular methods: return nil
+                    if is_init {
+                        byte_code.write_op(OpCode::GETLOCAL(0), self.lookup_source_line(method.body.end()));
+                    } else {
+                        byte_code.write_op(OpCode::NIL, self.lookup_source_line(method.body.end()));
+                    }
                     byte_code.write_op(OpCode::RET, self.lookup_source_line(method.body.end()));
 
                     let upvalue_count = context.upvalues.len();
@@ -1607,12 +1613,25 @@ impl VirtualMachine {
                         ParseError::InvalidTopLevelReturn { span: ret.span },
                     ]));
                 }
-                if let Some(value) = value {
-                    self.compile_expr(value, context, result)?;
+                // Check for return with value inside initializer
+                if context.function_type() == FunctionType::Initializer {
+                    if value.is_some() {
+                        return Err(VirtualMachineError::CompileError(vec![
+                            ParseError::InitializerReturnValue { span: ret.span },
+                        ]));
+                    }
+                    // Empty return in init returns 'this' (slot 0)
+                    result.write_op(OpCode::GETLOCAL(0), self.lookup_source_line(stmt.start()));
+                    result.write_op(OpCode::RET, self.lookup_source_line(stmt.start()));
                 } else {
-                    result.write_op(OpCode::NIL, self.lookup_source_line(stmt.start()));
+                    // Regular function/method return
+                    if let Some(value) = value {
+                        self.compile_expr(value, context, result)?;
+                    } else {
+                        result.write_op(OpCode::NIL, self.lookup_source_line(stmt.start()));
+                    }
+                    result.write_op(OpCode::RET, self.lookup_source_line(stmt.start()));
                 }
-                result.write_op(OpCode::RET, self.lookup_source_line(stmt.start()));
                 Ok(())
             }
         }
