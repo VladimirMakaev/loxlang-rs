@@ -1,12 +1,9 @@
 use std::{
-    cell::RefCell,
     collections::{hash_map::DefaultHasher, BTreeMap},
     fmt::{Display, Formatter},
     hash::BuildHasherDefault,
     io::Write,
     mem,
-    ops::Deref,
-    rc::Rc,
 };
 
 use hashbrown::HashMap;
@@ -19,12 +16,12 @@ use crate::{
     codemap::Codemap,
     gc::{GcRef, Heap},
     interner::{DefaultInterner, DefaultStringTable, Interner, StringTable, StrId},
-    object::{Obj, ObjClosure, ObjFunction, ObjKind, UpvalueLocation},
+    object::{Obj, ObjClosure, ObjFunction, ObjKind, ObjUpvalue, UpvalueLocation},
     parser::{
         AstExpression, AstIdent, AstStmt, Expression, ForStmt, FunDeclaration, IfStmt,
         LogicalExpression, ParseError, Parser, Span, StmtDeclaration, WhileStmt,
     },
-    value::{UpValueImpl, Value, ValueTypes},
+    value::{Value, ValueTypes},
 };
 
 #[derive(Error, Debug)]
@@ -77,36 +74,9 @@ pub enum VirtualMachineError {
     Unhandled(#[from] anyhow::Error),
 }
 
-// Function struct - REMOVED: Functions are now heap-allocated as ObjFunction via GcRef
-
 // OpCodeSlice struct - REMOVED: Decompilation not yet updated for heap-based functions
 
-#[derive(Clone, Debug)]
-struct UpValuePtr(Rc<RefCell<UpValueImpl>>);
-
-impl UpValuePtr {
-    pub fn get_value(&self, vm: &VirtualMachine) -> Result<Value, VirtualMachineError> {
-        let value = self.0.borrow();
-        match value.deref() {
-            UpValueImpl::Open(stack_slot) => Ok(vm.stack[*stack_slot].clone()),
-            UpValueImpl::Closed(closed_idx) => Ok(vm.closed_upvalues[*closed_idx].clone()),
-        }
-    }
-
-    pub fn close(&self, vm: &mut VirtualMachine, stack_value: Value) {
-        let value = self.0.deref();
-        if matches!(value.borrow().deref(), UpValueImpl::Open(_)) {
-            value.replace(UpValueImpl::Closed(vm.closed_upvalues.len()));
-            vm.closed_upvalues.push(stack_value);
-        }
-    }
-}
-
-impl From<UpValueImpl> for UpValuePtr {
-    fn from(value: UpValueImpl) -> Self {
-        Self(Rc::new(RefCell::new(value)))
-    }
-}
+// UpValuePtr struct - REMOVED: Upvalues are now heap-allocated as ObjUpvalue via GcRef
 
 // Closure struct - REMOVED: Closures are now heap-allocated as ObjClosure via GcRef
 
@@ -133,19 +103,29 @@ impl CallFrame {
 
 #[derive(Default)]
 struct OpenUpValues {
-    slots_to_values: BTreeMap<usize, UpValuePtr>,
+    slots_to_values: BTreeMap<usize, GcRef>,
 }
 
 impl OpenUpValues {
-    pub fn take(&mut self, stack_slot: usize) -> Option<UpValuePtr> {
+    pub fn take(&mut self, stack_slot: usize) -> Option<GcRef> {
         self.slots_to_values.remove(&stack_slot)
     }
 
-    pub fn capture_upvalue(&mut self, stack_slot: usize) -> UpValuePtr {
-        self.slots_to_values
-            .entry(stack_slot)
-            .or_insert(UpValueImpl::Open(stack_slot).into())
-            .clone()
+    pub fn get(&self, stack_slot: usize) -> Option<GcRef> {
+        self.slots_to_values.get(&stack_slot).copied()
+    }
+
+    pub fn insert(&mut self, stack_slot: usize, upvalue: GcRef) {
+        self.slots_to_values.insert(stack_slot, upvalue);
+    }
+
+    /// Get all open upvalues at or above the given stack slot
+    pub fn close_from(&mut self, slot: usize) -> Vec<(usize, GcRef)> {
+        let keys: Vec<_> = self.slots_to_values.range(slot..).map(|(&k, &v)| (k, v)).collect();
+        for (k, _) in &keys {
+            self.slots_to_values.remove(k);
+        }
+        keys
     }
 }
 
@@ -159,9 +139,9 @@ pub struct VirtualMachine {
     // closures: Vec<Closure> - REMOVED: Closures are now heap-allocated
     // functions: Vec<Function> - REMOVED: Functions are now heap-allocated
     // function_by_name: HashMap<StrId, usize> - REMOVED: No longer needed with heap storage
+    // closed_upvalues: Vec<Value> - REMOVED: Upvalues now store closed value directly in ObjUpvalue
     pub(crate) globals: HashMap<StrId, Value>,
     pub(crate) codemap: Codemap,
-    pub(crate) closed_upvalues: Vec<Value>,
     open_upvalues: OpenUpValues,
     pub(crate) heap: Heap,
     /// The top-level script closure (set after compilation)
@@ -183,7 +163,6 @@ impl VirtualMachine {
                 lines_start_at_1: true,
                 position_starts_at_1: false,
             },
-            closed_upvalues: Default::default(),
             open_upvalues: Default::default(),
             heap: Heap::new(),
             script_closure: None,
@@ -264,6 +243,42 @@ impl VirtualMachine {
         }
     }
 
+    /// Get an upvalue from a GcRef (panics if not an upvalue).
+    pub fn get_heap_upvalue(&self, r: GcRef) -> &ObjUpvalue {
+        if let ObjKind::Upvalue(u) = &self.heap.get(r).kind {
+            u
+        } else {
+            panic!("Expected upvalue object")
+        }
+    }
+
+    /// Capture an upvalue for the given stack slot.
+    /// Reuses existing open upvalue if one exists, otherwise creates new one.
+    fn capture_upvalue(&mut self, stack_slot: usize) -> GcRef {
+        // Check if we already have an open upvalue for this slot
+        if let Some(existing) = self.open_upvalues.get(stack_slot) {
+            return existing;
+        }
+
+        // Create new open upvalue on heap
+        let upvalue_ref = self.alloc_upvalue(UpvalueLocation::Open(stack_slot));
+        self.open_upvalues.insert(stack_slot, upvalue_ref);
+        upvalue_ref
+    }
+
+    /// Close all upvalues at or above the given stack slot.
+    fn close_upvalues(&mut self, from_slot: usize) {
+        let to_close = self.open_upvalues.close_from(from_slot);
+
+        for (stack_slot, upvalue_ref) in to_close {
+            let value = self.stack[stack_slot].clone();
+            let obj = self.heap.get_mut(upvalue_ref);
+            if let ObjKind::Upvalue(upvalue) = &mut obj.kind {
+                upvalue.location = UpvalueLocation::Closed(value);
+            }
+        }
+    }
+
     // =========================================================================
     // Garbage Collection
     // =========================================================================
@@ -288,10 +303,10 @@ impl VirtualMachine {
             self.mark_value(value);
         }
 
-        // 4. Mark closed upvalues
-        let closed: Vec<Value> = self.closed_upvalues.clone();
-        for value in closed {
-            self.mark_value(value);
+        // 4. Mark open upvalues (they point to ObjUpvalue on heap)
+        let open_refs: Vec<GcRef> = self.open_upvalues.slots_to_values.values().copied().collect();
+        for r in open_refs {
+            self.heap.mark_object(r);
         }
     }
 
@@ -444,41 +459,7 @@ impl VirtualMachine {
         self.frames[self.frame_idx].locals_idx
     }
 
-    /// Get the current function's bytecode for reading upvalue descriptors
-    fn current_function_code(&self) -> &ByteCode {
-        let frame = &self.frames[self.frame_idx];
-        let closure = self.get_heap_closure(frame.closure);
-        let function = self.get_heap_function(closure.function);
-        &function.code
-    }
-
-    fn read_upvalues(&mut self, function_ref: GcRef) -> Result<Vec<UpValuePtr>, VirtualMachineError> {
-        let function = self.get_heap_function(function_ref);
-        let upvalue_count = function.upvalue_count;
-        let mut result = Vec::with_capacity(upvalue_count);
-        for _ in 0..upvalue_count {
-            let frame = &self.frames[self.frame_idx];
-            let frame_closure = frame.closure;
-            let closure = self.get_heap_closure(frame_closure);
-            let function = self.get_heap_function(closure.function);
-            let is_local = function.code.read_u8(frame.ip) == 1;
-            let idx = function.code.read_u16(frame.ip + 1);
-
-            let value = if is_local {
-                self.open_upvalues
-                    .capture_upvalue(self.locals_idx() + idx as usize)
-            } else {
-                // TODO(03-08): Access parent closure's upvalues from heap
-                // For now, return error since upvalue handling is incomplete
-                return Err(self.unhandled_error(format!(
-                    "Upvalue access not yet migrated to heap (03-08)"
-                )));
-            };
-            self.frames[self.frame_idx].inc_ip(3);
-            result.push(value);
-        }
-        Ok(result)
-    }
+    // read_upvalues function - REMOVED: Upvalue capture now handled directly in CLOSURE opcode
 
     fn ip(&self) -> usize {
         self.frames[self.frame_idx].ip
@@ -905,16 +886,8 @@ impl VirtualMachine {
                         self.current_line()
                     );
 
-                    for local_slot in (self.locals_idx() + 1..self.stack.len()).rev() {
-                        let value = self.pop()?;
-                        if let Some(up_value_for_slot) = self.open_upvalues.take(local_slot) {
-                            debug!(
-                                "closing slot:{local_slot}, value = {value}",
-                                value = self.as_display(value.clone())
-                            );
-                            up_value_for_slot.close(self, value);
-                        }
-                    }
+                    // Close any open upvalues for locals that are about to be popped
+                    self.close_upvalues(self.locals_idx() + 1);
 
                     self.stack.truncate(self.frames[self.frame_idx].locals_idx);
                     self.frames.pop();
@@ -924,31 +897,47 @@ impl VirtualMachine {
 
                     continue;
                 }
-                OpCode::GETUPVALUE(idx) => {
+                OpCode::GETUPVALUE(slot) => {
                     debug!(
-                        "@{at} GETUPVALUE {idx} [line: {line}]",
+                        "@{at} GETUPVALUE {slot} [line: {line}]",
                         at = self.ip(),
                         line = self.current_line()
                     );
-                    // TODO(03-08): Upvalue access needs migration to heap-based ObjUpvalue
-                    // For now, upvalues are not supported
-                    return Err(self.unhandled_error(format!(
-                        "GETUPVALUE not yet migrated to heap (03-08)"
-                    )));
+                    let frame = &self.frames[self.frame_idx];
+                    let closure = self.get_heap_closure(frame.closure);
+                    let upvalue_ref = closure.upvalues[slot as usize];
+                    let upvalue = self.get_heap_upvalue(upvalue_ref);
+
+                    let value = match &upvalue.location {
+                        UpvalueLocation::Open(stack_slot) => self.stack[*stack_slot].clone(),
+                        UpvalueLocation::Closed(val) => val.clone(),
+                    };
+                    self.push(value);
                 }
-                OpCode::SETUPVALUE(idx) => {
-                    let new_value = self.pop()?;
+                OpCode::SETUPVALUE(slot) => {
+                    let value = self.peek()?.clone();
                     debug!(
-                        "@{at} SETUPVALUE {idx} = {value} [line: {line}]",
+                        "@{at} SETUPVALUE {slot} = {val} [line: {line}]",
                         at = self.ip(),
-                        value = self.as_display(new_value.clone()),
+                        val = self.as_display(value.clone()),
                         line = self.current_line()
                     );
-                    // TODO(03-08): Upvalue access needs migration to heap-based ObjUpvalue
-                    // For now, upvalues are not supported
-                    return Err(self.unhandled_error(format!(
-                        "SETUPVALUE not yet migrated to heap (03-08)"
-                    )));
+                    let frame = &self.frames[self.frame_idx];
+                    let closure = self.get_heap_closure(frame.closure);
+                    let upvalue_ref = closure.upvalues[slot as usize];
+
+                    // Get mutable access to upvalue
+                    let obj = self.heap.get_mut(upvalue_ref);
+                    if let ObjKind::Upvalue(upvalue) = &mut obj.kind {
+                        match &mut upvalue.location {
+                            UpvalueLocation::Open(stack_slot) => {
+                                self.stack[*stack_slot] = value;
+                            }
+                            UpvalueLocation::Closed(ref mut val) => {
+                                *val = value;
+                            }
+                        }
+                    }
                 }
                 OpCode::CLOSURE(function_const_idx) => {
                     debug!(
@@ -969,14 +958,31 @@ impl VirtualMachine {
                     let function = self.get_heap_function(function_ref);
                     let upvalue_count = function.upvalue_count;
 
-                    // Read upvalue descriptors from bytecode and skip past them
-                    // (upvalues will be properly handled in 03-08)
+                    // Read upvalue descriptors and capture upvalues
+                    let mut upvalue_refs: Vec<GcRef> = Vec::with_capacity(upvalue_count);
                     for _ in 0..upvalue_count {
-                        self.frames[self.frame_idx].inc_ip(3); // Skip each upvalue descriptor (1 byte is_local + 2 bytes index)
+                        let frame = &self.frames[self.frame_idx];
+                        let frame_closure = frame.closure;
+                        let closure = self.get_heap_closure(frame_closure);
+                        let parent_function = self.get_heap_function(closure.function);
+
+                        let is_local = parent_function.code.read_u8(frame.ip) == 1;
+                        let index = parent_function.code.read_u16(frame.ip + 1) as usize;
+                        self.frames[self.frame_idx].inc_ip(3);
+
+                        let upvalue_ref = if is_local {
+                            // Capture from stack
+                            let stack_slot = self.locals_idx() + index;
+                            self.capture_upvalue(stack_slot)
+                        } else {
+                            // Capture from enclosing closure's upvalues
+                            let parent_closure = self.get_heap_closure(frame_closure);
+                            parent_closure.upvalues[index]
+                        };
+                        upvalue_refs.push(upvalue_ref);
                     }
 
-                    // TODO(03-08): Closure upvalues are empty - fix in Plan 03-08
-                    let closure_ref = self.alloc_closure(function_ref, vec![]);
+                    let closure_ref = self.alloc_closure(function_ref, upvalue_refs);
                     self.push(Value::Object(closure_ref));
 
                     continue;
@@ -989,14 +995,9 @@ impl VirtualMachine {
                         value = self.as_display(self.stack.last().cloned().unwrap()),
                     );
 
-                    // Guard against phantom upvalues - closure may have been defined but never executed
-                    if let Some(upvalue) = self.open_upvalues.take(self.stack.len() - 1) {
-                        let stack_value = self.pop()?;
-                        upvalue.close(self, stack_value);
-                    } else {
-                        // Closure was never executed, just pop the local
-                        self.pop()?;
-                    }
+                    let slot = self.stack.len() - 1;
+                    self.close_upvalues(slot);
+                    self.pop()?;
                 }
             }
             self.frames[self.frame_idx].inc_ip(size);

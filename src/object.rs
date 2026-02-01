@@ -106,9 +106,6 @@ impl Obj {
 
 impl ObjKind {
     /// Returns all GC references contained in this object (for mark phase traversal).
-    ///
-    /// Note: When Value::Object variant is added (Plan 02), this will need to
-    /// extract GcRef from closed upvalues containing object references.
     pub fn get_references(&self) -> Vec<GcRef> {
         match self {
             ObjKind::String(_) => vec![],
@@ -118,9 +115,14 @@ impl ObjKind {
                 refs
             }
             ObjKind::Function(f) => vec![f.name],
-            // TODO: When Value::Object is added in Plan 02, extract GcRef from
-            // UpvalueLocation::Closed(Value::Object(r)) here.
-            ObjKind::Upvalue(_) => vec![],
+            ObjKind::Upvalue(u) => {
+                // Extract GcRef from closed upvalues containing object references
+                if let UpvalueLocation::Closed(Value::Object(r)) = &u.location {
+                    vec![*r]
+                } else {
+                    vec![]
+                }
+            }
         }
     }
 }

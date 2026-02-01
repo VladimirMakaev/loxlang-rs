@@ -46,11 +46,7 @@ impl Value {
 
 // ClosureValue struct - REMOVED: Closures are now heap-allocated as Value::Object(GcRef)
 
-#[derive(Debug)]
-pub enum UpValueImpl {
-    Open(usize),
-    Closed(usize),
-}
+// UpValueImpl enum - REMOVED: Upvalues are now heap-allocated as ObjUpvalue via GcRef
 
 impl From<f64> for Value {
     fn from(value: f64) -> Self {
