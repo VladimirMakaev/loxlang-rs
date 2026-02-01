@@ -63,6 +63,14 @@ pub enum ParseError {
     SuperOutsideClass { span: Span },
     #[error("Can't use 'super' in a class with no superclass.")]
     SuperWithoutSuperclass { span: Span },
+    #[error("Too many local variables in function.")]
+    TooManyLocals { span: Span },
+    #[error("Too many constants in one chunk.")]
+    TooManyConstants { span: Span },
+    #[error("Too many closure variables in function.")]
+    TooManyUpvalues { span: Span },
+    #[error("Loop body too large.")]
+    LoopBodyTooLarge { span: Span },
 }
 
 impl Into<Vec<ParseError>> for ParseError {
@@ -450,6 +458,11 @@ impl<'source> Parser<'source> {
                         return Err(ParseError::MaxFunDeclarationParameters { span: span }.into());
                     }
 
+                    // Check for duplicate parameter name
+                    if params.iter().any(|p: &AstIdent| p.node == x) {
+                        return Err(ParseError::VariableAlreadyDeclared { span }.into());
+                    }
+
                     params.push(x.ast(span));
                 } else {
                     unreachable!()
@@ -551,6 +564,11 @@ impl<'source> Parser<'source> {
                 {
                     if params.len() == u8::MAX as usize {
                         return Err(ParseError::MaxFunDeclarationParameters { span: span }.into());
+                    }
+
+                    // Check for duplicate parameter name
+                    if params.iter().any(|p: &AstIdent| p.node == x) {
+                        return Err(ParseError::VariableAlreadyDeclared { span }.into());
                     }
 
                     params.push(x.ast(span));

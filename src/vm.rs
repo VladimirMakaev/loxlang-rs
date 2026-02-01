@@ -42,6 +42,16 @@ pub enum RuntimeErrorKind {
 /// Maximum call frame depth before stack overflow
 const FRAMES_MAX: usize = 256;
 
+/// Maximum number of local variables per function (clox: UINT8_COUNT = 256)
+/// This includes function slot/this, so 255 user-defined locals max.
+const LOCALS_MAX: usize = 256;
+
+/// Maximum number of constants per chunk (u8 index limit)
+const CONSTANTS_MAX: usize = 256;
+
+/// Maximum number of upvalues per function (clox: UINT8_COUNT = 256)
+const UPVALUES_MAX: usize = 256;
+
 /// Returns the clox-formatted error message for operand type errors
 fn operand_type_error_message(instruction: OpCodeTypes) -> &'static str {
     match instruction {
@@ -2864,6 +2874,18 @@ impl<'a> Display for DisplayError<'a> {
                             Self::report_error_with_span(self.code, self.codemap, f, span, error)?
                         }
                         ParseError::InheritFromSelf { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::TooManyLocals { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::TooManyConstants { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::TooManyUpvalues { span } => {
+                            Self::report_error_with_span(self.code, self.codemap, f, span, error)?
+                        }
+                        ParseError::LoopBodyTooLarge { span } => {
                             Self::report_error_with_span(self.code, self.codemap, f, span, error)?
                         }
                         ParseError::UnexpectedEof { last_position } => {
