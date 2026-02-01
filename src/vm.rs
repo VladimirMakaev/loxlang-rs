@@ -687,11 +687,25 @@ impl VirtualMachine {
                                 self.current_line()
                             );
                         }
-                        (Value::String(l), Value::String(r)) => {
-                            let mut contatenate = String::from(self.interner.get_str(l));
-                            contatenate.push_str(self.interner.get_str(r));
-                            let result = self.interner.intern_string(contatenate);
-                            self.push(Value::String(result));
+                        (Value::Object(l), Value::Object(r)) => {
+                            // Check if both are strings using ObjKind pattern matching
+                            let left_obj = self.heap.get(l);
+                            let right_obj = self.heap.get(r);
+                            if let (ObjKind::String(ls), ObjKind::String(rs)) =
+                                (&left_obj.kind, &right_obj.kind)
+                            {
+                                let concatenate = format!("{}{}", ls.value, rs.value);
+                                let result = self.alloc_string(concatenate);
+                                self.push(Value::Object(result));
+                            } else {
+                                // Not strings - return type error
+                                return Err(VirtualMachineError::RuntimeError {
+                                    kind: RuntimeErrorKind::Unexpected {
+                                        error: anyhow::Error::msg("Operands must be two numbers or two strings."),
+                                    },
+                                    stacktrace: self.stacktrace(),
+                                });
+                            }
                         }
                         (_, _) => {
                             return Err(VirtualMachineError::RuntimeError {
@@ -1423,7 +1437,8 @@ impl VirtualMachine {
                 self.add_constant((*num).into());
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::StringLiteral(s)) => {
-                let val = Value::String(self.interner.intern_str(s));
+                let gc_ref = self.alloc_string(s.to_string());
+                let val = Value::Object(gc_ref);
                 result.write_op(
                     OpCode::CONSTANT(self.constants.len() as u16),
                     self.lookup_source_line(expr.start()),
