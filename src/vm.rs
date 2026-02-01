@@ -1514,13 +1514,33 @@ impl VirtualMachine {
                     self.lookup_source_line(calee.start()),
                 )
             }
-            crate::parser::Expression::GetProperty { .. } => {
-                // Property get compilation will be implemented in 04-04
-                todo!("GetProperty bytecode emission")
+            crate::parser::Expression::GetProperty { object, name } => {
+                // Compile the object expression (pushes instance onto stack)
+                self.compile_expr(object, context, result)?;
+                // Allocate property name string and add to constants
+                let name_ref = self.alloc_string(name.clone());
+                let name_const_idx = self.constants.len() as u16;
+                self.constants.push(Value::Object(name_ref));
+                // Emit GET_PROPERTY opcode with constant index
+                result.write_op(
+                    OpCode::GET_PROPERTY(name_const_idx),
+                    self.lookup_source_line(expr.start()),
+                );
             }
-            crate::parser::Expression::SetProperty { .. } => {
-                // Property set compilation will be implemented in 04-04
-                todo!("SetProperty bytecode emission")
+            crate::parser::Expression::SetProperty { object, name, value } => {
+                // Compile the object expression (pushes instance onto stack)
+                self.compile_expr(object, context, result)?;
+                // Compile the value expression (pushes value onto stack)
+                self.compile_expr(value, context, result)?;
+                // Allocate property name string and add to constants
+                let name_ref = self.alloc_string(name.clone());
+                let name_const_idx = self.constants.len() as u16;
+                self.constants.push(Value::Object(name_ref));
+                // Emit SET_PROPERTY opcode with constant index
+                result.write_op(
+                    OpCode::SET_PROPERTY(name_const_idx),
+                    self.lookup_source_line(expr.start()),
+                );
             }
         }
 
