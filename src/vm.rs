@@ -1038,11 +1038,111 @@ impl VirtualMachine {
                     let class_ref = self.alloc_class(name_ref);
                     self.push(Value::Object(class_ref));
                 }
-                OpCode::GET_PROPERTY(_) => {
-                    todo!("GET_PROPERTY VM implementation")
+                OpCode::GET_PROPERTY(name_const_idx) => {
+                    // Get property name GcRef from constants table
+                    let name_value = &self.constants[name_const_idx as usize];
+                    let name_ref = match name_value {
+                        Value::Object(r) => *r,
+                        _ => return Err(self.unhandled_error("Expected string object in constants")),
+                    };
+
+                    debug!(
+                        "@{at} GET_PROPERTY {name} [line: {line}]",
+                        at = self.ip(),
+                        name = self.get_heap_string(name_ref),
+                        line = self.current_line()
+                    );
+
+                    // Peek instance from stack
+                    let instance_value = self.peek()?;
+
+                    // Check if it's an instance
+                    if let Value::Object(instance_ref) = instance_value {
+                        let obj = self.heap.get(instance_ref);
+                        if let ObjKind::Instance(instance) = &obj.kind {
+                            // Look up field in instance.fields by name_ref
+                            if let Some(value) = instance.fields.get(&name_ref) {
+                                let value = value.clone();
+                                // Pop instance from stack
+                                self.pop()?;
+                                // Push field value
+                                self.push(value);
+                            } else {
+                                // Field not found
+                                let name = self.get_heap_string(name_ref).to_string();
+                                return Err(VirtualMachineError::RuntimeError {
+                                    kind: RuntimeErrorKind::Unexpected {
+                                        error: anyhow::Error::msg(format!("Undefined property '{}'.", name)),
+                                    },
+                                    stacktrace: self.stacktrace(),
+                                });
+                            }
+                        } else {
+                            // Not an instance
+                            return Err(VirtualMachineError::RuntimeError {
+                                kind: RuntimeErrorKind::Unexpected {
+                                    error: anyhow::Error::msg("Only instances have properties."),
+                                },
+                                stacktrace: self.stacktrace(),
+                            });
+                        }
+                    } else {
+                        // Not an object at all
+                        return Err(VirtualMachineError::RuntimeError {
+                            kind: RuntimeErrorKind::Unexpected {
+                                error: anyhow::Error::msg("Only instances have properties."),
+                            },
+                            stacktrace: self.stacktrace(),
+                        });
+                    }
                 }
-                OpCode::SET_PROPERTY(_) => {
-                    todo!("SET_PROPERTY VM implementation")
+                OpCode::SET_PROPERTY(name_const_idx) => {
+                    // Get property name GcRef from constants table
+                    let name_value = &self.constants[name_const_idx as usize];
+                    let name_ref = match name_value {
+                        Value::Object(r) => *r,
+                        _ => return Err(self.unhandled_error("Expected string object in constants")),
+                    };
+
+                    debug!(
+                        "@{at} SET_PROPERTY {name} [line: {line}]",
+                        at = self.ip(),
+                        name = self.get_heap_string(name_ref),
+                        line = self.current_line()
+                    );
+
+                    // Pop value from stack
+                    let value = self.pop()?;
+                    // Pop instance from stack
+                    let instance_value = self.pop()?;
+
+                    // Check if it's an instance
+                    if let Value::Object(instance_ref) = instance_value {
+                        // Get mutable access to instance
+                        let obj = self.heap.get_mut(instance_ref);
+                        if let ObjKind::Instance(instance) = &mut obj.kind {
+                            // Insert/update field
+                            instance.fields.insert(name_ref, value.clone());
+                            // Push value back onto stack (assignment returns the value)
+                            self.push(value);
+                        } else {
+                            // Not an instance
+                            return Err(VirtualMachineError::RuntimeError {
+                                kind: RuntimeErrorKind::Unexpected {
+                                    error: anyhow::Error::msg("Only instances have fields."),
+                                },
+                                stacktrace: self.stacktrace(),
+                            });
+                        }
+                    } else {
+                        // Not an object at all
+                        return Err(VirtualMachineError::RuntimeError {
+                            kind: RuntimeErrorKind::Unexpected {
+                                error: anyhow::Error::msg("Only instances have fields."),
+                            },
+                            stacktrace: self.stacktrace(),
+                        });
+                    }
                 }
             }
             self.frames[self.frame_idx].inc_ip(size);
