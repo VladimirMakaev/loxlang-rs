@@ -848,7 +848,30 @@ impl VirtualMachine {
                     let up_value = &self.closures[frame.closure_idx].upvalues[idx as usize];
                     self.push(up_value.get_value(self)?);
                 }
-                OpCode::SETUPVALUE(_idx) => todo!(),
+                OpCode::SETUPVALUE(idx) => {
+                    let new_value = self.pop()?;
+                    debug!(
+                        "@{at} SETUPVALUE {idx} = {value} [line: {line}]",
+                        at = self.ip(),
+                        value = self.as_display(new_value.clone()),
+                        line = self.current_line()
+                    );
+                    let frame = &self.frames[self.frame_idx];
+                    let up_value = &self.closures[frame.closure_idx].upvalues[idx as usize];
+
+                    // Write value based on whether upvalue is open or closed
+                    match up_value.0.borrow().deref() {
+                        UpValueImpl::Open(stack_slot) => {
+                            self.stack[*stack_slot] = new_value.clone();
+                        }
+                        UpValueImpl::Closed(closed_idx) => {
+                            self.closed_upvalues[*closed_idx] = new_value.clone();
+                        }
+                    }
+
+                    // Push value back on stack (assignment expressions evaluate to assigned value)
+                    self.push(new_value);
+                }
                 OpCode::CLOSURE(function_idx) => {
                     debug!(
                         "@{at} CLOSURE {function_idx} [line: {line}]",
