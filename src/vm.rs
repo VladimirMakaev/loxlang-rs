@@ -3075,8 +3075,11 @@ impl<'a> Display for DispayValue<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.value {
             Value::Number(x) => {
-                // Match clox %g behavior: integers print without decimal point
-                if x.fract() == 0.0 && x.abs() < 1e15 {
+                // Check for negative zero first
+                if x == 0.0 && x.is_sign_negative() {
+                    write!(f, "-0")
+                } else if x.fract() == 0.0 && x.abs() < 1e15 {
+                    // Match clox %g behavior: integers print without decimal point
                     write!(f, "{}", x as i64)
                 } else {
                     write!(f, "{}", x)

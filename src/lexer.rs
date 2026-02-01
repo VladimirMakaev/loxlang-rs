@@ -242,7 +242,7 @@ mod tests {
                     end: 1,
                     line: 0
                 })),
-                Some(Result::Err(LexerError::InvalidTokenAt { start: 1, end: 5 })),
+                Some(Result::Err(LexerError::UnterminatedString { line: 1 })),
                 None
             ]
         );
