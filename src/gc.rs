@@ -87,6 +87,7 @@ impl Heap {
     }
 
     /// Checks if a reference points to a valid (non-freed) object.
+    #[allow(dead_code)]
     pub fn is_valid(&self, r: GcRef) -> bool {
         self.objects
             .get(r.0 as usize)

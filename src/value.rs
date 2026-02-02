@@ -17,14 +17,17 @@ pub enum Value {
 }
 
 impl Value {
+    #[allow(dead_code)]
     pub fn object(gc_ref: GcRef) -> Value {
         Value::Object(gc_ref)
     }
 
+    #[allow(dead_code)]
     pub fn is_object(&self) -> bool {
         matches!(self, Value::Object(_))
     }
 
+    #[allow(dead_code)]
     pub fn as_object(&self) -> Option<GcRef> {
         if let Value::Object(r) = self {
             Some(*r)
@@ -35,6 +38,7 @@ impl Value {
 
     /// Returns the GcRef if this is an Object variant.
     /// Caller must verify the object kind is ObjKind::String using heap.get(r).kind.
+    #[allow(dead_code)]
     pub fn as_string_ref(&self) -> Option<GcRef> {
         if let Value::Object(r) = self {
             Some(*r)

@@ -36,6 +36,7 @@ pub struct ObjNative {
 /// A string object with its value and pre-computed hash.
 pub struct ObjString {
     pub value: String,
+    #[allow(dead_code)]
     pub hash: u64,
 }
 

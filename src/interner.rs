@@ -43,6 +43,7 @@ impl<H: BuildHasher> StringTable<H> {
     }
 
     /// Get the underlying hasher for external use
+    #[allow(dead_code)]
     pub fn hasher(&self) -> &H {
         &self.hasher
     }
@@ -108,6 +109,7 @@ impl<H: BuildHasher> Interner<H> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn intern_string(&mut self, val: String) -> StrId {
         let h = |x: &_| self.hasher.hash_one(x);
         if let Some(idx) = self.raw_table.find(h(val.as_str()), |str_idx| {

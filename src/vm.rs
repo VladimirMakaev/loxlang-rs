@@ -316,6 +316,7 @@ impl VirtualMachine {
     }
 
     /// Get a bound method from a GcRef (panics if not a bound method).
+    #[allow(dead_code)]
     pub fn get_heap_bound_method(&self, r: GcRef) -> &ObjBoundMethod {
         if let ObjKind::BoundMethod(bm) = &self.heap.get(r).kind {
             bm
@@ -2741,6 +2742,7 @@ pub struct LexicalScope<'a> {
 }
 
 impl<'a> LexicalScope<'a> {
+    #[allow(dead_code)]
     pub fn name(&self) -> &str {
         self.name.as_deref().unwrap_or("<script>")
     }
@@ -2846,6 +2848,7 @@ impl<'a> LexicalScope<'a> {
     }
 
     /// Set the class context for method compilation
+    #[allow(dead_code)]
     pub fn set_class_context(&mut self, has_superclass: bool) {
         self.enclosing_class = Some(ClassContext { has_superclass });
     }
@@ -2941,6 +2944,7 @@ impl<'a> LexicalScope<'a> {
     }
 
     /// Returns the number of upvalues in the current function.
+    #[allow(dead_code)]
     pub fn upvalues_count(&self) -> usize {
         self.upvalues.len()
     }
@@ -2958,6 +2962,7 @@ impl<'a> LexicalScope<'a> {
         Ok(result)
     }
 
+    #[allow(dead_code)]
     pub fn iter_local_upvalues(&self) -> impl Iterator<Item = (&str, usize)> {
         self.upvalues
             .iter()
