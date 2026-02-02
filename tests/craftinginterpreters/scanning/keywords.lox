@@ -1,3 +1,4 @@
+// nontest
 and class else false for fun if nil or return super this true var while
 
 // expect: AND and null
