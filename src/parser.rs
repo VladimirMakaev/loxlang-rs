@@ -611,13 +611,12 @@ impl<'source> Parser<'source> {
 
     fn var_declaration(&mut self) -> StmtResult {
         let decl_token = self.consume(TokenType::VAR)?;
-        let var_ident = match self.identifier_contant()? {
-            Spanned {
-                node: Expression::Identier(ident),
-                span,
-            } => Ok(ident.ast(span)),
-            Spanned { span, .. } => Err(ParseError::InvalidVariableName { span }),
-        }?;
+        // Use consume_or_else to produce "Expect variable name." error for reserved words
+        let ident_token = self.consume_or_else(TokenType::IDENTIFIER, |t| ParseError::UnexpectedToken {
+            span: t.span(),
+            expectation: "Expect variable name.".to_owned(),
+        })?;
+        let var_ident = ident_token.slice(self.code).to_owned().ast(ident_token.span());
         let mut expr = None;
         if let Some(_) = self.match_token(TokenType::EQUAL)? {
             expr = Some(self.expression()?);
