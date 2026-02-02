@@ -2807,7 +2807,11 @@ impl<'a> LexicalScope<'a> {
 
     /// Check if a local at the given index is uninitialized (has sentinel depth).
     pub fn is_local_uninitialized(&self, idx: usize) -> bool {
-        let local_idx = idx.saturating_sub(self.args.len());
+        // Parameters are always initialized
+        if idx < self.args.len() {
+            return false;
+        }
+        let local_idx = idx - self.args.len();
         if local_idx < self.locals.len() {
             self.locals[local_idx].1 == usize::MAX
         } else {
