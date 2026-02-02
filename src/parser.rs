@@ -788,10 +788,10 @@ impl<'source> Parser<'source> {
         let l = self.consume(TokenType::LeftParen)?;
         let result = self.expression()?;
         let r = self.consume(TokenType::RightParen)?;
-        return Ok(Expression::Grouping {
+        Ok(Expression::Grouping {
             expr: Box::new(result),
         }
-        .ast(Span::new(l.start(), r.end())));
+        .ast(Span::new(l.start(), r.end())))
     }
 
     fn call(&mut self, left: AstExpression) -> ExprResult {
@@ -800,11 +800,11 @@ impl<'source> Parser<'source> {
         match self.match_token(TokenType::RightParen)? {
             Some(t) => {
                 let span = Span::new(left.start(), t.end());
-                return Ok(Expression::Call {
+                Ok(Expression::Call {
                     calee: Box::new(left),
                     arguments: Default::default(),
                 }
-                .ast(span));
+                .ast(span))
             }
             None => {
                 let mut params = Vec::new();

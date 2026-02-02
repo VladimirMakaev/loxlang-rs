@@ -2987,7 +2987,7 @@ impl<'a> LexicalScope<'a> {
             }
         }
 
-        return false;
+        false
     }
 
     fn capture_local(&mut self, name: &str) -> Option<usize> {
@@ -3050,7 +3050,7 @@ impl<'a> LexicalScope<'a> {
             return Some((self.upvalues.len() - 1, value));
         }
 
-        return None;
+        None
     }
 }
 
