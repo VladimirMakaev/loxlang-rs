@@ -83,8 +83,8 @@ impl ByteCode {
             | Some(OpCode::SETUPVALUE(idx))
             | Some(OpCode::CLOSURE(idx))
             | Some(OpCode::CLASS(idx))
-            | Some(OpCode::GET_PROPERTY(idx))
-            | Some(OpCode::SET_PROPERTY(idx))
+            | Some(OpCode::GETPROPERTY(idx))
+            | Some(OpCode::SETPROPERTY(idx))
             | Some(OpCode::METHOD(idx)) => {
                 *idx = self.read_u16(ip);
                 3
@@ -104,11 +104,11 @@ impl ByteCode {
                 *arg_count = self.read_u8(ip + 2);
                 4
             }
-            Some(OpCode::GET_SUPER(idx)) => {
+            Some(OpCode::GETSUPER(idx)) => {
                 *idx = self.read_u16(ip);
                 3
             }
-            Some(OpCode::SUPER_INVOKE(name_idx, arg_count)) => {
+            Some(OpCode::SUPERINVOKE(name_idx, arg_count)) => {
                 *name_idx = self.read_u16(ip);
                 *arg_count = self.read_u8(ip + 2);
                 4
@@ -162,8 +162,8 @@ impl ByteCode {
             OpCode::GETUPVALUE(idx) | OpCode::SETUPVALUE(idx) => write_one_u16(&mut self.code, idx),
             OpCode::CLOSURE(idx) => write_one_u16(&mut self.code, idx),
             OpCode::CLASS(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::GET_PROPERTY(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::SET_PROPERTY(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::GETPROPERTY(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::SETPROPERTY(idx) => write_one_u16(&mut self.code, idx),
             OpCode::METHOD(idx) => write_one_u16(&mut self.code, idx),
             OpCode::JUMPIFFALSE(offset) | OpCode::JUMP(offset) | OpCode::LOOP(offset) => {
                 write_one_i16(&mut self.code, offset)
@@ -177,8 +177,8 @@ impl ByteCode {
                 self.code.push(arg_count);
                 3
             }
-            OpCode::GET_SUPER(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::SUPER_INVOKE(name_idx, arg_count) => {
+            OpCode::GETSUPER(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::SUPERINVOKE(name_idx, arg_count) => {
                 write_one_u16(&mut self.code, name_idx);
                 self.code.push(arg_count);
                 3
@@ -223,13 +223,13 @@ pub enum OpCode {
     LESS,
     EQUAL,
     CLASS(u16),
-    GET_PROPERTY(u16),
-    SET_PROPERTY(u16),
+    GETPROPERTY(u16),
+    SETPROPERTY(u16),
     METHOD(u16),
-    INVOKE(u16, u8), // (method_name_const_idx, arg_count)
-    INHERIT,           // No operands - stack: [superclass, subclass] -> [superclass]
-    GET_SUPER(u16),    // u16 = method name constant index
-    SUPER_INVOKE(u16, u8), // u16 = method name, u8 = arg count
+    INVOKE(u16, u8),      // (method_name_const_idx, arg_count)
+    INHERIT,              // No operands - stack: [superclass, subclass] -> [superclass]
+    GETSUPER(u16),        // u16 = method name constant index
+    SUPERINVOKE(u16, u8), // u16 = method name, u8 = arg count
 }
 
 #[cfg(test)]

@@ -16,12 +16,12 @@ use crate::{
     byte_code::{ByteCode, JumpOffset, OpCode, OpCodeError, OpCodeTypes},
     codemap::Codemap,
     gc::{GcRef, Heap},
-    interner::{DefaultInterner, DefaultStringTable, Interner, StringTable, StrId},
+    interner::{DefaultInterner, DefaultStringTable, Interner, StrId, StringTable},
     lexer::LexerError,
     object::{Obj, ObjBoundMethod, ObjClosure, ObjFunction, ObjKind, ObjUpvalue, UpvalueLocation},
     parser::{
-        AstExpression, AstIdent, AstStmt, ClassDeclaration, Expression, ForStmt, FunDeclaration, IfStmt,
-        LogicalExpression, ParseError, Parser, Span, StmtDeclaration, WhileStmt,
+        AstExpression, AstIdent, AstStmt, ClassDeclaration, Expression, ForStmt, FunDeclaration,
+        IfStmt, LogicalExpression, ParseError, Parser, Span, StmtDeclaration, WhileStmt,
     },
     value::{Value, ValueTypes},
 };
@@ -133,7 +133,11 @@ impl OpenUpValues {
 
     /// Get all open upvalues at or above the given stack slot
     pub fn close_from(&mut self, slot: usize) -> Vec<(usize, GcRef)> {
-        let keys: Vec<_> = self.slots_to_values.range(slot..).map(|(&k, &v)| (k, v)).collect();
+        let keys: Vec<_> = self
+            .slots_to_values
+            .range(slot..)
+            .map(|(&k, &v)| (k, v))
+            .collect();
         for (k, _) in &keys {
             self.slots_to_values.remove(k);
         }
@@ -221,7 +225,13 @@ impl VirtualMachine {
     }
 
     /// Allocate a function on the heap.
-    pub fn alloc_function(&mut self, name: GcRef, arity: usize, code: ByteCode, upvalue_count: usize) -> GcRef {
+    pub fn alloc_function(
+        &mut self,
+        name: GcRef,
+        arity: usize,
+        code: ByteCode,
+        upvalue_count: usize,
+    ) -> GcRef {
         self.maybe_collect();
         let obj = Obj::function(name, arity, code, upvalue_count);
         self.heap.alloc(obj)
@@ -365,7 +375,12 @@ impl VirtualMachine {
         }
 
         // 5. Mark open upvalues (they point to ObjUpvalue on heap)
-        let open_refs: Vec<GcRef> = self.open_upvalues.slots_to_values.values().copied().collect();
+        let open_refs: Vec<GcRef> = self
+            .open_upvalues
+            .slots_to_values
+            .values()
+            .copied()
+            .collect();
         for r in open_refs {
             self.heap.mark_object(r);
         }
@@ -394,7 +409,8 @@ impl VirtualMachine {
         self.heap.trace_references();
 
         // Clean string table (weak references)
-        self.string_table.remove_unmarked(|r| self.heap.is_marked(r));
+        self.string_table
+            .remove_unmarked(|r| self.heap.is_marked(r));
 
         // Sweep phase
         self.heap.sweep();
@@ -405,7 +421,11 @@ impl VirtualMachine {
         #[cfg(feature = "debug_gc")]
         {
             let after = self.heap.bytes_allocated;
-            eprintln!("-- gc end ({} bytes, freed {})", after, before.saturating_sub(after));
+            eprintln!(
+                "-- gc end ({} bytes, freed {})",
+                after,
+                before.saturating_sub(after)
+            );
         }
     }
 
@@ -563,11 +583,7 @@ impl VirtualMachine {
         let closure = self.get_heap_closure(frame.closure);
         let function = self.get_heap_function(closure.function);
         let name = self.get_heap_string(function.name);
-        format!(
-            "[line {}] in {}",
-            function.code.line(frame.ip()),
-            name
-        )
+        format!("[line {}] in {}", function.code.line(frame.ip()), name)
     }
 
     fn stacktrace(&self) -> String {
@@ -599,7 +615,9 @@ impl VirtualMachine {
     }
 
     pub fn run<TOut: Write>(&mut self, stdout: &mut TOut) -> Result<(), VirtualMachineError> {
-        let script_closure = self.script_closure.expect("compile() must be called before run()");
+        let script_closure = self
+            .script_closure
+            .expect("compile() must be called before run()");
         self.frames.push(CallFrame {
             closure: script_closure,
             ip: 0,
@@ -662,7 +680,9 @@ impl VirtualMachine {
                                 // Not strings - return type error
                                 return Err(VirtualMachineError::RuntimeError {
                                     kind: RuntimeErrorKind::Unexpected {
-                                        error: anyhow::Error::msg("Operands must be two numbers or two strings."),
+                                        error: anyhow::Error::msg(
+                                            "Operands must be two numbers or two strings.",
+                                        ),
                                     },
                                     stacktrace: self.stacktrace(),
                                 });
@@ -671,7 +691,9 @@ impl VirtualMachine {
                         (_, _) => {
                             return Err(VirtualMachineError::RuntimeError {
                                 kind: RuntimeErrorKind::Unexpected {
-                                    error: anyhow::Error::msg("Operands must be two numbers or two strings."),
+                                    error: anyhow::Error::msg(
+                                        "Operands must be two numbers or two strings.",
+                                    ),
                                 },
                                 stacktrace: self.stacktrace(),
                             });
@@ -1067,7 +1089,9 @@ impl VirtualMachine {
 
                                 // Execute native function
                                 let result = match native_name {
-                                    "clock" => Value::Number(self.clock_start.elapsed().as_secs_f64()),
+                                    "clock" => {
+                                        Value::Number(self.clock_start.elapsed().as_secs_f64())
+                                    }
                                     _ => panic!("Unknown native function: {}", native_name),
                                 };
 
@@ -1171,7 +1195,11 @@ impl VirtualMachine {
                     let function_value = &self.constants[function_const_idx as usize];
                     let function_ref = match function_value {
                         Value::Object(r) => *r,
-                        _ => return Err(self.unhandled_error("Expected function object in constants")),
+                        _ => {
+                            return Err(
+                                self.unhandled_error("Expected function object in constants")
+                            )
+                        }
                     };
 
                     // Get upvalue count from function
@@ -1224,7 +1252,9 @@ impl VirtualMachine {
                     let name_value = &self.constants[name_const_idx as usize];
                     let name_ref = match name_value {
                         Value::Object(r) => *r,
-                        _ => return Err(self.unhandled_error("Expected string object in constants")),
+                        _ => {
+                            return Err(self.unhandled_error("Expected string object in constants"))
+                        }
                     };
 
                     debug!(
@@ -1238,12 +1268,14 @@ impl VirtualMachine {
                     let class_ref = self.alloc_class(name_ref);
                     self.push(Value::Object(class_ref));
                 }
-                OpCode::GET_PROPERTY(name_const_idx) => {
+                OpCode::GETPROPERTY(name_const_idx) => {
                     // Get property name GcRef from constants table
                     let name_value = &self.constants[name_const_idx as usize];
                     let name_ref = match name_value {
                         Value::Object(r) => *r,
-                        _ => return Err(self.unhandled_error("Expected string object in constants")),
+                        _ => {
+                            return Err(self.unhandled_error("Expected string object in constants"))
+                        }
                     };
 
                     debug!(
@@ -1275,7 +1307,8 @@ impl VirtualMachine {
                                     if let Some(&method_ref) = klass.methods.get(&name_ref) {
                                         // Clone instance_value before passing to alloc to avoid borrow issues
                                         let receiver = instance_value.clone();
-                                        let bound_ref = self.alloc_bound_method(receiver, method_ref);
+                                        let bound_ref =
+                                            self.alloc_bound_method(receiver, method_ref);
                                         // Pop instance from stack
                                         self.pop()?;
                                         // Push bound method
@@ -1285,14 +1318,19 @@ impl VirtualMachine {
                                         let name = self.get_heap_string(name_ref).to_string();
                                         return Err(VirtualMachineError::RuntimeError {
                                             kind: RuntimeErrorKind::Unexpected {
-                                                error: anyhow::Error::msg(format!("Undefined property '{}'.", name)),
+                                                error: anyhow::Error::msg(format!(
+                                                    "Undefined property '{}'.",
+                                                    name
+                                                )),
                                             },
                                             stacktrace: self.stacktrace(),
                                         });
                                     }
                                 } else {
                                     // klass is not a class (shouldn't happen)
-                                    return Err(self.unhandled_error("Instance's klass is not a class"));
+                                    return Err(
+                                        self.unhandled_error("Instance's klass is not a class")
+                                    );
                                 }
                             }
                         } else {
@@ -1314,12 +1352,14 @@ impl VirtualMachine {
                         });
                     }
                 }
-                OpCode::SET_PROPERTY(name_const_idx) => {
+                OpCode::SETPROPERTY(name_const_idx) => {
                     // Get property name GcRef from constants table
                     let name_value = &self.constants[name_const_idx as usize];
                     let name_ref = match name_value {
                         Value::Object(r) => *r,
-                        _ => return Err(self.unhandled_error("Expected string object in constants")),
+                        _ => {
+                            return Err(self.unhandled_error("Expected string object in constants"))
+                        }
                     };
 
                     debug!(
@@ -1367,7 +1407,9 @@ impl VirtualMachine {
                     let name_value = &self.constants[name_const_idx as usize];
                     let name_ref = match name_value {
                         Value::Object(r) => *r,
-                        _ => return Err(self.unhandled_error("Expected string object in constants")),
+                        _ => {
+                            return Err(self.unhandled_error("Expected string object in constants"))
+                        }
                     };
 
                     debug!(
@@ -1405,7 +1447,9 @@ impl VirtualMachine {
                     // Get method name from constants
                     let name_ref = match &self.constants[name_idx as usize] {
                         Value::Object(r) => *r,
-                        _ => return Err(self.unhandled_error("Expected string constant for INVOKE")),
+                        _ => {
+                            return Err(self.unhandled_error("Expected string constant for INVOKE"))
+                        }
                     };
 
                     debug!(
@@ -1433,21 +1477,27 @@ impl VirtualMachine {
                                     Value::Object(field_obj_ref) => {
                                         match &self.heap.get(*field_obj_ref).kind {
                                             ObjKind::Closure(closure) => {
-                                                let function = self.get_heap_function(closure.function);
+                                                let function =
+                                                    self.get_heap_function(closure.function);
                                                 if function.arity != arg_count {
-                                                    return Err(VirtualMachineError::RuntimeError {
-                                                        kind: RuntimeErrorKind::InvalidFunArity {
-                                                            got: arg_count,
-                                                            expected: function.arity,
+                                                    return Err(
+                                                        VirtualMachineError::RuntimeError {
+                                                            kind:
+                                                                RuntimeErrorKind::InvalidFunArity {
+                                                                    got: arg_count,
+                                                                    expected: function.arity,
+                                                                },
+                                                            stacktrace: self.stacktrace(),
                                                         },
-                                                        stacktrace: self.stacktrace(),
-                                                    });
+                                                    );
                                                 }
                                                 if self.frames.len() >= FRAMES_MAX {
-                                                    return Err(VirtualMachineError::RuntimeError {
-                                                        kind: RuntimeErrorKind::StackOverflow,
-                                                        stacktrace: self.stacktrace(),
-                                                    });
+                                                    return Err(
+                                                        VirtualMachineError::RuntimeError {
+                                                            kind: RuntimeErrorKind::StackOverflow,
+                                                            stacktrace: self.stacktrace(),
+                                                        },
+                                                    );
                                                 }
                                                 self.frames.push(CallFrame {
                                                     ip: 0,
@@ -1464,22 +1514,28 @@ impl VirtualMachine {
                                                 self.stack[receiver_pos] = bound_receiver;
 
                                                 let closure = self.get_heap_closure(method_ref);
-                                                let function = self.get_heap_function(closure.function);
+                                                let function =
+                                                    self.get_heap_function(closure.function);
 
                                                 if function.arity != arg_count {
-                                                    return Err(VirtualMachineError::RuntimeError {
-                                                        kind: RuntimeErrorKind::InvalidFunArity {
-                                                            got: arg_count,
-                                                            expected: function.arity,
+                                                    return Err(
+                                                        VirtualMachineError::RuntimeError {
+                                                            kind:
+                                                                RuntimeErrorKind::InvalidFunArity {
+                                                                    got: arg_count,
+                                                                    expected: function.arity,
+                                                                },
+                                                            stacktrace: self.stacktrace(),
                                                         },
-                                                        stacktrace: self.stacktrace(),
-                                                    });
+                                                    );
                                                 }
                                                 if self.frames.len() >= FRAMES_MAX {
-                                                    return Err(VirtualMachineError::RuntimeError {
-                                                        kind: RuntimeErrorKind::StackOverflow,
-                                                        stacktrace: self.stacktrace(),
-                                                    });
+                                                    return Err(
+                                                        VirtualMachineError::RuntimeError {
+                                                            kind: RuntimeErrorKind::StackOverflow,
+                                                            stacktrace: self.stacktrace(),
+                                                        },
+                                                    );
                                                 }
                                                 self.frames.push(CallFrame {
                                                     ip: 0,
@@ -1543,13 +1599,18 @@ impl VirtualMachine {
                                         let name = self.get_heap_string(name_ref).to_string();
                                         return Err(VirtualMachineError::RuntimeError {
                                             kind: RuntimeErrorKind::Unexpected {
-                                                error: anyhow::Error::msg(format!("Undefined property '{}'.", name)),
+                                                error: anyhow::Error::msg(format!(
+                                                    "Undefined property '{}'.",
+                                                    name
+                                                )),
                                             },
                                             stacktrace: self.stacktrace(),
                                         });
                                     }
                                 } else {
-                                    return Err(self.unhandled_error("Instance's klass is not a class"));
+                                    return Err(
+                                        self.unhandled_error("Instance's klass is not a class")
+                                    );
                                 }
                             }
                         } else {
@@ -1574,7 +1635,7 @@ impl VirtualMachine {
                 OpCode::INHERIT => {
                     // Stack: [..., superclass, subclass]
                     let subclass_value = self.pop()?;
-                    let superclass_value = self.peek()?;  // Leave on stack for "super" local
+                    let superclass_value = self.peek()?; // Leave on stack for "super" local
 
                     // Validate superclass is a class
                     let superclass_ref = match &superclass_value {
@@ -1622,12 +1683,16 @@ impl VirtualMachine {
                         }
                     }
                 }
-                OpCode::GET_SUPER(name_const_idx) => {
+                OpCode::GETSUPER(name_const_idx) => {
                     // Stack: [..., receiver (this), superclass]
                     let name_value = self.constants[name_const_idx as usize].clone();
                     let name_ref = match name_value {
                         Value::Object(r) => r,
-                        _ => return Err(self.unhandled_error("Expected string constant for method name")),
+                        _ => {
+                            return Err(
+                                self.unhandled_error("Expected string constant for method name")
+                            )
+                        }
                     };
 
                     let superclass_value = self.pop()?;
@@ -1669,7 +1734,7 @@ impl VirtualMachine {
                         }
                     }
                 }
-                OpCode::SUPER_INVOKE(name_const_idx, arg_count) => {
+                OpCode::SUPERINVOKE(name_const_idx, arg_count) => {
                     // Stack: [receiver, arg1, ..., argN, superclass]
                     let arg_count = arg_count as usize;
                     let name_value = self.constants[name_const_idx as usize].clone();
@@ -1836,7 +1901,8 @@ impl VirtualMachine {
 
                 // Create function on heap
                 let name_ref = self.alloc_string(name.node.clone());
-                let function_ref = self.alloc_function(name_ref, params.len(), byte_code, upvalue_count);
+                let function_ref =
+                    self.alloc_function(name_ref, params.len(), byte_code, upvalue_count);
 
                 // Store upvalues info before leaving function context
                 let upvalues: Vec<_> = context.upvalues.iter().map(|(_, up)| up.clone()).collect();
@@ -1844,7 +1910,8 @@ impl VirtualMachine {
                 context.leave_function();
 
                 // Store function ref in constants table (in parent's context)
-                let function_const_idx = self.add_constant_checked(Value::Object(function_ref), context, name.span)?;
+                let function_const_idx =
+                    self.add_constant_checked(Value::Object(function_ref), context, name.span)?;
 
                 result.write_op(
                     OpCode::CLOSURE(function_const_idx),
@@ -1905,11 +1972,16 @@ impl VirtualMachine {
                 }
                 Ok(())
             }
-            crate::parser::Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration { name, methods, superclass })) => {
+            crate::parser::Stmt::Declarations(StmtDeclaration::Class(ClassDeclaration {
+                name,
+                methods,
+                superclass,
+            })) => {
                 let has_superclass = superclass.is_some();
                 // Emit CLASS opcode with name constant index
                 let name_ref = self.alloc_string(name.node.clone());
-                let name_const_idx = self.add_constant_checked(Value::Object(name_ref), context, name.span)?;
+                let name_const_idx =
+                    self.add_constant_checked(Value::Object(name_ref), context, name.span)?;
                 result.write_op(
                     OpCode::CLASS(name_const_idx),
                     self.lookup_source_line(name.start()),
@@ -2004,7 +2076,10 @@ impl VirtualMachine {
                     // For initializers: return 'this' (slot 0)
                     // For regular methods: return nil
                     if is_init {
-                        byte_code.write_op(OpCode::GETLOCAL(0), self.lookup_source_line(method.body.end()));
+                        byte_code.write_op(
+                            OpCode::GETLOCAL(0),
+                            self.lookup_source_line(method.body.end()),
+                        );
                     } else {
                         byte_code.write_op(OpCode::NIL, self.lookup_source_line(method.body.end()));
                     }
@@ -2022,12 +2097,17 @@ impl VirtualMachine {
                     );
 
                     // Store upvalues info before leaving function context
-                    let upvalues: Vec<_> = context.upvalues.iter().map(|(_, up)| up.clone()).collect();
+                    let upvalues: Vec<_> =
+                        context.upvalues.iter().map(|(_, up)| up.clone()).collect();
 
                     context.leave_function();
 
                     // Store function ref in constants table (in parent's context)
-                    let function_const_idx = self.add_constant_checked(Value::Object(function_ref), context, method.name.span)?;
+                    let function_const_idx = self.add_constant_checked(
+                        Value::Object(function_ref),
+                        context,
+                        method.name.span,
+                    )?;
 
                     result.write_op(
                         OpCode::CLOSURE(function_const_idx),
@@ -2039,7 +2119,11 @@ impl VirtualMachine {
 
                     // Allocate method name string for METHOD opcode
                     let method_name_const_ref = self.alloc_string(method.name.node.clone());
-                    let method_name_const_idx = self.add_constant_checked(Value::Object(method_name_const_ref), context, method.name.span)?;
+                    let method_name_const_idx = self.add_constant_checked(
+                        Value::Object(method_name_const_ref),
+                        context,
+                        method.name.span,
+                    )?;
 
                     // Emit METHOD opcode
                     result.write_op(
@@ -2051,9 +2135,13 @@ impl VirtualMachine {
                 // Close "super" local if we had a superclass
                 if superclass.is_some() {
                     // Check if any method captured "super"
-                    let (_, captured) = context.iter_locals_in_block_rev().next().unwrap_or(("", false));
+                    let (_, captured) = context
+                        .iter_locals_in_block_rev()
+                        .next()
+                        .unwrap_or(("", false));
                     if captured {
-                        result.write_op(OpCode::CLOSEUPVALUE, self.lookup_source_line(name.start()));
+                        result
+                            .write_op(OpCode::CLOSEUPVALUE, self.lookup_source_line(name.start()));
                     } else {
                         result.write_op(OpCode::POP, self.lookup_source_line(name.start()));
                     }
@@ -2150,7 +2238,9 @@ impl VirtualMachine {
                     // Point span at the closing brace (end - 1)
                     let end = loop_block.end();
                     return Err(VirtualMachineError::CompileError(vec![
-                        ParseError::LoopBodyTooLarge { span: Span::new(end - 1, end) },
+                        ParseError::LoopBodyTooLarge {
+                            span: Span::new(end - 1, end),
+                        },
                     ]));
                 }
 
@@ -2198,7 +2288,9 @@ impl VirtualMachine {
                     // Point span at the closing brace (end - 1)
                     let end = block.end();
                     return Err(VirtualMachineError::CompileError(vec![
-                        ParseError::LoopBodyTooLarge { span: Span::new(end - 1, end) },
+                        ParseError::LoopBodyTooLarge {
+                            span: Span::new(end - 1, end),
+                        },
                     ]));
                 }
 
@@ -2261,7 +2353,8 @@ impl VirtualMachine {
                 self.lookup_source_line(span.start()),
             )
         } else {
-            match context.resolve_upvalue_checked(name, span)
+            match context
+                .resolve_upvalue_checked(name, span)
                 .map_err(|e| VirtualMachineError::CompileError(vec![e]))?
             {
                 Some((idx, _)) => {
@@ -2308,7 +2401,8 @@ impl VirtualMachine {
                         self.lookup_source_line(expr.start()),
                     )
                 } else {
-                    match context.resolve_upvalue_checked(name.as_str(), expr.span)
+                    match context
+                        .resolve_upvalue_checked(name.as_str(), expr.span)
                         .map_err(|e| VirtualMachineError::CompileError(vec![e]))?
                     {
                         Some((idx, _)) => {
@@ -2329,19 +2423,13 @@ impl VirtualMachine {
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NumberLiteral(num)) => {
                 let idx = self.add_constant_checked((*num).into(), context, expr.span)?;
-                result.write_op(
-                    OpCode::CONSTANT(idx),
-                    self.lookup_source_line(expr.start()),
-                );
+                result.write_op(OpCode::CONSTANT(idx), self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::StringLiteral(s)) => {
                 let gc_ref = self.alloc_string(s.to_string());
                 let val = Value::Object(gc_ref);
                 let idx = self.add_constant_checked(val, context, expr.span)?;
-                result.write_op(
-                    OpCode::CONSTANT(idx),
-                    self.lookup_source_line(expr.start()),
-                );
+                result.write_op(OpCode::CONSTANT(idx), self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::BoolLiteral(x)) => {
                 if *x {
@@ -2464,7 +2552,8 @@ impl VirtualMachine {
 
                     // Emit INVOKE with method name and arg count
                     let name_ref = self.alloc_string(name.clone());
-                    let name_idx = self.add_constant_checked(Value::Object(name_ref), context, expr.span)?;
+                    let name_idx =
+                        self.add_constant_checked(Value::Object(name_ref), context, expr.span)?;
                     result.write_op(OpCode::INVOKE(name_idx, arguments.len() as u8), line);
                 } else {
                     // Regular call - existing logic
@@ -2480,24 +2569,30 @@ impl VirtualMachine {
                 self.compile_expr(object, context, result)?;
                 // Allocate property name string and add to constants
                 let name_ref = self.alloc_string(name.clone());
-                let name_const_idx = self.add_constant_checked(Value::Object(name_ref), context, expr.span)?;
+                let name_const_idx =
+                    self.add_constant_checked(Value::Object(name_ref), context, expr.span)?;
                 // Emit GET_PROPERTY opcode with constant index
                 result.write_op(
-                    OpCode::GET_PROPERTY(name_const_idx),
+                    OpCode::GETPROPERTY(name_const_idx),
                     self.lookup_source_line(expr.start()),
                 );
             }
-            crate::parser::Expression::SetProperty { object, name, value } => {
+            crate::parser::Expression::SetProperty {
+                object,
+                name,
+                value,
+            } => {
                 // Compile the object expression (pushes instance onto stack)
                 self.compile_expr(object, context, result)?;
                 // Compile the value expression (pushes value onto stack)
                 self.compile_expr(value, context, result)?;
                 // Allocate property name string and add to constants
                 let name_ref = self.alloc_string(name.clone());
-                let name_const_idx = self.add_constant_checked(Value::Object(name_ref), context, expr.span)?;
+                let name_const_idx =
+                    self.add_constant_checked(Value::Object(name_ref), context, expr.span)?;
                 // Emit SET_PROPERTY opcode with constant index
                 result.write_op(
-                    OpCode::SET_PROPERTY(name_const_idx),
+                    OpCode::SETPROPERTY(name_const_idx),
                     self.lookup_source_line(expr.start()),
                 );
             }
@@ -2561,9 +2656,10 @@ impl VirtualMachine {
 
                 // Emit GET_SUPER with method name constant
                 let method_name_ref = self.alloc_string(method.clone());
-                let method_const_idx = self.add_constant_checked(Value::Object(method_name_ref), context, expr.span)?;
+                let method_const_idx =
+                    self.add_constant_checked(Value::Object(method_name_ref), context, expr.span)?;
 
-                result.write_op(OpCode::GET_SUPER(method_const_idx), line);
+                result.write_op(OpCode::GETSUPER(method_const_idx), line);
             }
         }
 
@@ -2634,7 +2730,7 @@ pub struct LexicalScope<'a> {
     name: Option<String>,
     function_type: FunctionType,
     enclosing_class: Option<ClassContext>, // Some if inside a class body
-    constants_count: usize, // Track constants per function for limit check
+    constants_count: usize,                // Track constants per function for limit check
 }
 
 impl<'a> LexicalScope<'a> {
@@ -2693,7 +2789,13 @@ impl<'a> LexicalScope<'a> {
 
     /// Enter a method compilation context.
     /// Unlike function_decl, slot 0 is "this" instead of the function name.
-    pub fn method_decl(&mut self, name: &'a str, args: impl IntoIterator<Item = &'a str>, is_init: bool, has_superclass: bool) {
+    pub fn method_decl(
+        &mut self,
+        name: &'a str,
+        args: impl IntoIterator<Item = &'a str>,
+        is_init: bool,
+        has_superclass: bool,
+    ) {
         let function_type = if is_init {
             FunctionType::Initializer
         } else {
@@ -2837,7 +2939,11 @@ impl<'a> LexicalScope<'a> {
     }
 
     /// Resolve upvalue with limit checking. Returns error if limit exceeded.
-    pub fn resolve_upvalue_checked(&mut self, name: &'a str, span: Span) -> Result<Option<(usize, UpvalueRef)>, ParseError> {
+    pub fn resolve_upvalue_checked(
+        &mut self,
+        name: &'a str,
+        span: Span,
+    ) -> Result<Option<(usize, UpvalueRef)>, ParseError> {
         let result = self.resolve_upvalue(name);
         if self.upvalues.len() > UPVALUES_MAX {
             return Err(ParseError::TooManyUpvalues { span });
@@ -3048,23 +3154,25 @@ impl<'a> Display for DisplayError<'a> {
                         ParseError::UninitializedLocal { span } => {
                             Self::report_error_with_span(self.code, self.codemap, f, span, error)?
                         }
-                        ParseError::UnexpectedEof { last_position } => {
-                            Self::report_error_at_end(self.codemap, f, *last_position, "Expect expression.")?
-                        }
-                        ParseError::UnexpectedEofWithMessage { last_position, message } => {
-                            Self::report_error_at_end(self.codemap, f, *last_position, message)?
-                        }
-                        ParseError::LexerError { source } => {
-                            match source {
-                                LexerError::UnterminatedString { line } => {
-                                    writeln!(f, "[line {}] Error: Unterminated string.", line)?
-                                }
-                                LexerError::UnexpectedCharacter { line } => {
-                                    writeln!(f, "[line {}] Error: Unexpected character.", line)?
-                                }
-                                _ => writeln!(f, "Lexer error: {:?}", source)?,
+                        ParseError::UnexpectedEof { last_position } => Self::report_error_at_end(
+                            self.codemap,
+                            f,
+                            *last_position,
+                            "Expect expression.",
+                        )?,
+                        ParseError::UnexpectedEofWithMessage {
+                            last_position,
+                            message,
+                        } => Self::report_error_at_end(self.codemap, f, *last_position, message)?,
+                        ParseError::LexerError { source } => match source {
+                            LexerError::UnterminatedString { line } => {
+                                writeln!(f, "[line {}] Error: Unterminated string.", line)?
                             }
-                        }
+                            LexerError::UnexpectedCharacter { line } => {
+                                writeln!(f, "[line {}] Error: Unexpected character.", line)?
+                            }
+                            _ => writeln!(f, "Lexer error: {:?}", source)?,
+                        },
                         _ => writeln!(f, "{}", error)?,
                     }
                 }
