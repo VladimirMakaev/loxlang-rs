@@ -167,6 +167,12 @@ pub struct VirtualMachine {
     clock_start: Instant,
 }
 
+impl Default for VirtualMachine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VirtualMachine {
     pub fn new() -> Self {
         let mut vm = Self {
@@ -520,13 +526,13 @@ impl VirtualMachine {
 
     fn pop_number(&mut self, op_code: OpCodeTypes) -> Result<f64, VirtualMachineError> {
         let value = self.pop()?;
-        Ok(value.clone().try_as_number().ok_or_else(|| {
+        value.clone().try_as_number().ok_or_else(|| {
             VirtualMachineError::UnexpectedStackOperandType {
                 instruction: op_code,
                 expected: ValueTypes::Number,
                 actual: value.into(),
             }
-        })?)
+        })
     }
 
     fn is_truthy(&self, value: &Value) -> bool {
@@ -592,7 +598,7 @@ impl VirtualMachine {
         let mut result = String::new();
         for (f_idx, frame) in self.frames.iter().enumerate().rev() {
             if f_idx != self.frame_idx {
-                result.push_str("\n");
+                result.push('\n');
             }
             result.push_str(&self.stacktrace_line(frame));
         }
@@ -934,10 +940,9 @@ impl VirtualMachine {
                         self.ip(),
                         self.as_display(callee.clone()),
                         (0..arg_count)
-                            .into_iter()
                             .map(|i| {
                                 self.as_display(
-                                    (&self.stack[self.stack.len() - arg_count + i]).clone(),
+                                    self.stack[self.stack.len() - arg_count + i].clone(),
                                 )
                             })
                             .map(|x| x.to_string())
@@ -1886,7 +1891,7 @@ impl VirtualMachine {
                 params,
                 body,
             })) => {
-                if context.is_already_declared(&name.node()) {
+                if context.is_already_declared(name.node()) {
                     return Err(VirtualMachineError::CompileError(vec![
                         ParseError::VariableAlreadyDeclared { span: name.span },
                     ]));
@@ -1907,7 +1912,7 @@ impl VirtualMachine {
                     self.alloc_function(name_ref, params.len(), byte_code, upvalue_count);
 
                 // Store upvalues info before leaving function context
-                let upvalues: Vec<_> = context.upvalues.iter().map(|(_, up)| up.clone()).collect();
+                let upvalues: Vec<_> = context.upvalues.iter().map(|(_, up)| *up).collect();
 
                 context.leave_function();
 
@@ -2100,7 +2105,7 @@ impl VirtualMachine {
 
                     // Store upvalues info before leaving function context
                     let upvalues: Vec<_> =
-                        context.upvalues.iter().map(|(_, up)| up.clone()).collect();
+                        context.upvalues.iter().map(|(_, up)| *up).collect();
 
                     context.leave_function();
 
@@ -2176,7 +2181,7 @@ impl VirtualMachine {
                 let jump_to_else = self.next_instruction(result); //
 
                 result.write_op(
-                    OpCode::JumpIfFalse(std::i16::MIN),
+                    OpCode::JumpIfFalse(i16::MIN),
                     self.lookup_source_line(stmt.start()),
                 );
 
@@ -2185,14 +2190,14 @@ impl VirtualMachine {
                 self.compile_statement(then_block, context, result)?;
                 let jump_after_then = result.size();
                 result.write_op(
-                    OpCode::Jump(std::i16::MIN),
+                    OpCode::Jump(i16::MIN),
                     self.lookup_source_line(stmt.start()),
                 );
                 if let Some(else_block) = else_block {
                     self.patch_offset(
                         result,
                         jump_to_else + 1,
-                        self.offset_since(jump_to_else, &result),
+                        self.offset_since(jump_to_else, result),
                     );
 
                     result.write_op(OpCode::Pop, self.lookup_source_line(stmt.start()));
@@ -2366,7 +2371,7 @@ impl VirtualMachine {
                     );
                 }
                 _ => {
-                    let idx = self.interner.intern_str(&name);
+                    let idx = self.interner.intern_str(name);
                     result.write_op(
                         OpCode::SetGlobal(idx),
                         self.lookup_source_line(span.start()),
@@ -2387,7 +2392,7 @@ impl VirtualMachine {
             crate::parser::Expression::Assignment { lvalue, rvalue } => {
                 if let Expression::Identier(name) = lvalue.node() {
                     self.compile_expr(rvalue, context, result)?;
-                    self.compile_assignment_from_stack(&name, expr.span, context, result)?;
+                    self.compile_assignment_from_stack(name, expr.span, context, result)?;
                 }
             }
             crate::parser::Expression::Identier(name) => {
@@ -2444,23 +2449,23 @@ impl VirtualMachine {
                 result.write_op(OpCode::Nil, self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Multiply { left, right } => {
-                self.compile_expr(&left.as_ref(), context, result)?;
-                self.compile_expr(&right.as_ref(), context, result)?;
+                self.compile_expr(left.as_ref(), context, result)?;
+                self.compile_expr(right.as_ref(), context, result)?;
                 result.write_op(OpCode::Multiply, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Divide { left, right } => {
-                self.compile_expr(&left.as_ref(), context, result)?;
-                self.compile_expr(&right.as_ref(), context, result)?;
+                self.compile_expr(left.as_ref(), context, result)?;
+                self.compile_expr(right.as_ref(), context, result)?;
                 result.write_op(OpCode::Divide, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Add { left, right } => {
-                self.compile_expr(&left.as_ref(), context, result)?;
-                self.compile_expr(&right.as_ref(), context, result)?;
+                self.compile_expr(left.as_ref(), context, result)?;
+                self.compile_expr(right.as_ref(), context, result)?;
                 result.write_op(OpCode::Add, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Subtract { left, right } => {
-                self.compile_expr(&left.as_ref(), context, result)?;
-                self.compile_expr(&right.as_ref(), context, result)?;
+                self.compile_expr(left.as_ref(), context, result)?;
+                self.compile_expr(right.as_ref(), context, result)?;
                 result.write_op(OpCode::Subtract, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::UnaryNegation { expr } => {
@@ -2468,56 +2473,56 @@ impl VirtualMachine {
                 result.write_op(OpCode::Negate, self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Grouping { expr } => {
-                self.compile_expr(&expr, context, result)?;
+                self.compile_expr(expr, context, result)?;
             }
             crate::parser::Expression::UnaryNot { expr } => {
                 self.compile_expr(expr, context, result)?;
                 result.write_op(OpCode::Not, self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::Greater { left, right }) => {
-                self.compile_expr(&left, context, result)?;
-                self.compile_expr(&right, context, result)?;
+                self.compile_expr(left, context, result)?;
+                self.compile_expr(right, context, result)?;
                 result.write_op(OpCode::Greater, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::Less { left, right }) => {
-                self.compile_expr(&right, context, result)?;
-                self.compile_expr(&left, context, result)?;
+                self.compile_expr(right, context, result)?;
+                self.compile_expr(left, context, result)?;
                 result.write_op(OpCode::Less, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::GreaterEqual { left, right }) => {
                 // a >= b is equivalent to !(a < b)
-                self.compile_expr(&right, context, result)?;
-                self.compile_expr(&left, context, result)?;
+                self.compile_expr(right, context, result)?;
+                self.compile_expr(left, context, result)?;
                 result.write_op(OpCode::Less, self.lookup_source_line(left.start()));
                 result.write_op(OpCode::Not, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::LessEqual { left, right }) => {
                 // a <= b is equivalent to !(a > b)
-                self.compile_expr(&left, context, result)?;
-                self.compile_expr(&right, context, result)?;
+                self.compile_expr(left, context, result)?;
+                self.compile_expr(right, context, result)?;
                 result.write_op(OpCode::Greater, self.lookup_source_line(left.start()));
                 result.write_op(OpCode::Not, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::Equal { left, right }) => {
-                self.compile_expr(&left, context, result)?;
-                self.compile_expr(&right, context, result)?;
+                self.compile_expr(left, context, result)?;
+                self.compile_expr(right, context, result)?;
                 result.write_op(OpCode::Equal, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::NotEqual { left, right }) => {
-                self.compile_expr(&left, context, result)?;
-                self.compile_expr(&right, context, result)?;
+                self.compile_expr(left, context, result)?;
+                self.compile_expr(right, context, result)?;
                 result.write_op(OpCode::Equal, self.lookup_source_line(left.start()));
                 result.write_op(OpCode::Not, self.lookup_source_line(left.start()));
             }
 
             crate::parser::Expression::Logical(LogicalExpression::And { left, right }) => {
-                self.compile_expr(&left, context, result)?;
+                self.compile_expr(left, context, result)?;
                 let pos_after_left = self.next_instruction(result);
                 result.write_op(
                     OpCode::JumpIfFalse(i16::MAX),
                     self.lookup_source_line(left.start()),
                 );
-                self.compile_expr(&right, context, result)?;
+                self.compile_expr(right, context, result)?;
                 self.patch_offset(
                     result,
                     pos_after_left + 1,
@@ -2525,7 +2530,7 @@ impl VirtualMachine {
                 )
             }
             crate::parser::Expression::Logical(LogicalExpression::Or { left, right }) => {
-                self.compile_expr(&left, context, result)?;
+                self.compile_expr(left, context, result)?;
 
                 result.write_op(
                     OpCode::JumpIfFalse(6), // JUMPIFFALSE + JUMP
@@ -2536,7 +2541,7 @@ impl VirtualMachine {
                     OpCode::Jump(i16::MAX),
                     self.lookup_source_line(left.start()),
                 );
-                self.compile_expr(&right, context, result)?;
+                self.compile_expr(right, context, result)?;
                 self.patch_offset(result, jump_out + 1, self.offset_since(jump_out, result));
             }
             crate::parser::Expression::Call { calee, arguments } => {
@@ -2559,7 +2564,7 @@ impl VirtualMachine {
                     result.write_op(OpCode::Invoke(name_idx, arguments.len() as u8), line);
                 } else {
                     // Regular call - existing logic
-                    self.compile_expr(&calee, context, result)?;
+                    self.compile_expr(calee, context, result)?;
                     for arg in arguments {
                         self.compile_expr(arg, context, result)?;
                     }
@@ -2668,7 +2673,7 @@ impl VirtualMachine {
         Ok(())
     }
 
-    fn as_display(&self, value: Value) -> DispayValue {
+    fn as_display(&self, value: Value) -> DispayValue<'_> {
         DispayValue { value, vm: self }
     }
 
@@ -2837,7 +2842,7 @@ impl<'a> LexicalScope<'a> {
 
     /// Check if the enclosing class has a superclass
     pub fn has_superclass(&self) -> bool {
-        self.enclosing_class.map_or(false, |ctx| ctx.has_superclass)
+        self.enclosing_class.is_some_and(|ctx| ctx.has_superclass)
     }
 
     /// Set the class context for method compilation
@@ -3035,18 +3040,18 @@ impl<'a> LexicalScope<'a> {
             .enumerate()
             .find(|(_, (n, _))| n == &name)
         {
-            return Some((i, value.to_owned()));
+            return Some((i, *value));
         }
 
         if let Some(local_idx) = self.parent.as_mut().and_then(|x| x.capture_local(name)) {
             let value = UpvalueRef::Local(local_idx);
-            self.upvalues.push((name, value.clone()));
+            self.upvalues.push((name, value));
             return Some((self.upvalues.len() - 1, value));
         }
 
         if let Some((i, _)) = self.parent.as_mut().and_then(|x| x.resolve_upvalue(name)) {
             let value = UpvalueRef::Upvalue(i);
-            self.upvalues.push((name, value.clone()));
+            self.upvalues.push((name, value));
             return Some((self.upvalues.len() - 1, value));
         }
 
