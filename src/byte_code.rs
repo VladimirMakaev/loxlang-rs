@@ -63,52 +63,52 @@ impl ByteCode {
         let mut result = OpCode::from_repr(discriminant);
         let ip = ip + 1;
         let size = match &mut result {
-            Some(OpCode::CONSTANT(idx)) => {
+            Some(OpCode::Constant(idx)) => {
                 *idx = self.read_u16(ip);
                 3
             }
-            Some(OpCode::DECLAREGLOBAL(idx)) => {
+            Some(OpCode::DeclareGlobal(idx)) => {
                 *idx = self.read_u16(ip).into();
                 3
             }
-            Some(OpCode::SETGLOBAL(idx)) | Some(OpCode::GETGLOBAL(idx)) => {
+            Some(OpCode::SetGlobal(idx)) | Some(OpCode::GetGlobal(idx)) => {
                 *idx = self.read_u16(ip).into();
                 3
             }
-            Some(OpCode::GETLOCAL(idx)) | Some(OpCode::SETLOCAL(idx)) => {
+            Some(OpCode::GetLocal(idx)) | Some(OpCode::SetLocal(idx)) => {
                 *idx = self.read_u16(ip);
                 3
             }
-            Some(OpCode::GETUPVALUE(idx))
-            | Some(OpCode::SETUPVALUE(idx))
-            | Some(OpCode::CLOSURE(idx))
-            | Some(OpCode::CLASS(idx))
-            | Some(OpCode::GETPROPERTY(idx))
-            | Some(OpCode::SETPROPERTY(idx))
-            | Some(OpCode::METHOD(idx)) => {
+            Some(OpCode::GetUpvalue(idx))
+            | Some(OpCode::SetUpvalue(idx))
+            | Some(OpCode::Closure(idx))
+            | Some(OpCode::Class(idx))
+            | Some(OpCode::GetProperty(idx))
+            | Some(OpCode::SetProperty(idx))
+            | Some(OpCode::Method(idx)) => {
                 *idx = self.read_u16(ip);
                 3
             }
-            Some(OpCode::JUMPIFFALSE(offset))
-            | Some(OpCode::JUMP(offset))
-            | Some(OpCode::LOOP(offset)) => {
+            Some(OpCode::JumpIfFalse(offset))
+            | Some(OpCode::Jump(offset))
+            | Some(OpCode::Loop(offset)) => {
                 *offset = self.read_i16(ip);
                 3
             }
-            Some(OpCode::CALL(arg_count)) => {
+            Some(OpCode::Call(arg_count)) => {
                 *arg_count = self.code[ip];
                 2
             }
-            Some(OpCode::INVOKE(name_idx, arg_count)) => {
+            Some(OpCode::Invoke(name_idx, arg_count)) => {
                 *name_idx = self.read_u16(ip);
                 *arg_count = self.read_u8(ip + 2);
                 4
             }
-            Some(OpCode::GETSUPER(idx)) => {
+            Some(OpCode::GetSuper(idx)) => {
                 *idx = self.read_u16(ip);
                 3
             }
-            Some(OpCode::SUPERINVOKE(name_idx, arg_count)) => {
+            Some(OpCode::SuperInvoke(name_idx, arg_count)) => {
                 *name_idx = self.read_u16(ip);
                 *arg_count = self.read_u8(ip + 2);
                 4
@@ -153,32 +153,32 @@ impl ByteCode {
             .push(unsafe { std::mem::transmute(std::mem::discriminant(&op)) });
 
         let bytes_count = match op {
-            OpCode::CONSTANT(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::DECLAREGLOBAL(idx) => write_one_u16(&mut self.code, idx.as_u16()),
-            OpCode::GETGLOBAL(idx) | OpCode::SETGLOBAL(idx) => {
+            OpCode::Constant(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::DeclareGlobal(idx) => write_one_u16(&mut self.code, idx.as_u16()),
+            OpCode::GetGlobal(idx) | OpCode::SetGlobal(idx) => {
                 write_one_u16(&mut self.code, idx.as_u16())
             }
-            OpCode::SETLOCAL(idx) | OpCode::GETLOCAL(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::GETUPVALUE(idx) | OpCode::SETUPVALUE(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::CLOSURE(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::CLASS(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::GETPROPERTY(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::SETPROPERTY(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::METHOD(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::JUMPIFFALSE(offset) | OpCode::JUMP(offset) | OpCode::LOOP(offset) => {
+            OpCode::SetLocal(idx) | OpCode::GetLocal(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::GetUpvalue(idx) | OpCode::SetUpvalue(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::Closure(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::Class(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::GetProperty(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::SetProperty(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::Method(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::JumpIfFalse(offset) | OpCode::Jump(offset) | OpCode::Loop(offset) => {
                 write_one_i16(&mut self.code, offset)
             }
-            OpCode::CALL(arg_count) => {
+            OpCode::Call(arg_count) => {
                 self.code.push(arg_count as u8);
                 1
             }
-            OpCode::INVOKE(name_idx, arg_count) => {
+            OpCode::Invoke(name_idx, arg_count) => {
                 write_one_u16(&mut self.code, name_idx);
                 self.code.push(arg_count);
                 3
             }
-            OpCode::GETSUPER(idx) => write_one_u16(&mut self.code, idx),
-            OpCode::SUPERINVOKE(name_idx, arg_count) => {
+            OpCode::GetSuper(idx) => write_one_u16(&mut self.code, idx),
+            OpCode::SuperInvoke(name_idx, arg_count) => {
                 write_one_u16(&mut self.code, name_idx);
                 self.code.push(arg_count);
                 3
@@ -193,43 +193,43 @@ impl ByteCode {
 #[strum_discriminants(name(OpCodeTypes), derive(strum::Display), derive(strum::FromRepr))]
 #[repr(u8)]
 pub enum OpCode {
-    CONSTANT(u16) = 1,
-    GETGLOBAL(StrId),
-    SETGLOBAL(StrId),
-    SETLOCAL(u16),
-    GETLOCAL(u16),
-    GETUPVALUE(u16),
-    SETUPVALUE(u16),
-    CLOSURE(u16),
-    CLOSEUPVALUE,
-    DECLAREGLOBAL(StrId),
-    JUMP(i16),
-    JUMPIFFALSE(i16),
-    LOOP(i16),
-    CALL(u8),
-    RET,
-    POP,
-    ADD,
-    MULTIPLY,
-    SUBTRACT,
-    DIVIDE,
-    NEGATE,
-    NOT,
-    PRINT,
-    TRUE,
-    FALSE,
-    NIL,
-    GREATER,
-    LESS,
-    EQUAL,
-    CLASS(u16),
-    GETPROPERTY(u16),
-    SETPROPERTY(u16),
-    METHOD(u16),
-    INVOKE(u16, u8),      // (method_name_const_idx, arg_count)
-    INHERIT,              // No operands - stack: [superclass, subclass] -> [superclass]
-    GETSUPER(u16),        // u16 = method name constant index
-    SUPERINVOKE(u16, u8), // u16 = method name, u8 = arg count
+    Constant(u16) = 1,
+    GetGlobal(StrId),
+    SetGlobal(StrId),
+    SetLocal(u16),
+    GetLocal(u16),
+    GetUpvalue(u16),
+    SetUpvalue(u16),
+    Closure(u16),
+    CloseUpvalue,
+    DeclareGlobal(StrId),
+    Jump(i16),
+    JumpIfFalse(i16),
+    Loop(i16),
+    Call(u8),
+    Ret,
+    Pop,
+    Add,
+    Multiply,
+    Subtract,
+    Divide,
+    Negate,
+    Not,
+    Print,
+    True,
+    False,
+    Nil,
+    Greater,
+    Less,
+    Equal,
+    Class(u16),
+    GetProperty(u16),
+    SetProperty(u16),
+    Method(u16),
+    Invoke(u16, u8),      // (method_name_const_idx, arg_count)
+    Inherit,              // No operands - stack: [superclass, subclass] -> [superclass]
+    GetSuper(u16),        // u16 = method name constant index
+    SuperInvoke(u16, u8), // u16 = method name, u8 = arg count
 }
 
 #[cfg(test)]
@@ -241,18 +241,18 @@ mod tests {
     #[test]
     fn test_write_read_op() {
         let mut bytes = ByteCode::default();
-        bytes.write_op(OpCode::ADD, 1);
-        bytes.write_op(OpCode::CONSTANT(20), 2);
-        bytes.write_op(OpCode::GETGLOBAL(30.into()), 3);
+        bytes.write_op(OpCode::Add, 1);
+        bytes.write_op(OpCode::Constant(20), 2);
+        bytes.write_op(OpCode::GetGlobal(30.into()), 3);
         let (x1, s1) = bytes.read_next(0).unwrap().unwrap();
         let (x2, s2) = bytes.read_next(s1).unwrap().unwrap();
         let (x3, _) = bytes.read_next(s1 + s2).unwrap().unwrap();
         assert_eq!(
             vec![x1, x2, x3],
             vec![
-                OpCode::ADD,
-                OpCode::CONSTANT(20),
-                OpCode::GETGLOBAL(30.into())
+                OpCode::Add,
+                OpCode::Constant(20),
+                OpCode::GetGlobal(30.into())
             ]
         );
         assert_eq!(bytes.lines, vec![1, 2, 2, 2, 3, 3, 3])

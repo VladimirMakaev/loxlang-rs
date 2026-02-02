@@ -26,7 +26,7 @@ pub enum TokenType {
     #[token("-")]
     Minus,
     #[token("+")]
-    PLUS,
+    Plus,
     #[token(";")]
     Semicolon,
     #[token("/")]
@@ -38,57 +38,57 @@ pub enum TokenType {
     #[token("!=")]
     BantEqual,
     #[token("=")]
-    EQUAL,
+    Equal,
     #[token("==")]
     EqualEqual,
     #[token(">")]
-    GREATER,
+    Greater,
     #[token(">=")]
     GreaterEqual,
     #[token("<")]
-    LESS,
+    Less,
     #[token("<=")]
     LessEqual,
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*")]
-    IDENTIFIER,
+    Identifier,
     #[regex("\"[^\"]*\"")]
-    STRING,
+    String,
     #[regex(r"\d+(\.\d+)?")]
-    NUMBER,
+    Number,
     #[token("and")]
-    AND,
+    And,
     #[token("class")]
-    CLASS,
+    Class,
     #[token("else")]
-    ELSE,
+    Else,
     #[token("false")]
-    FALSE,
+    False,
     #[token("for")]
-    FOR,
+    For,
     #[token("fun")]
-    FUN,
+    Fun,
     #[token("if")]
-    IF,
+    If,
     #[token("nil")]
-    NIL,
+    Nil,
     #[token("or")]
-    OR,
+    Or,
     #[token("print")]
-    PRINT,
+    Print,
     #[token("return")]
-    RETURN,
+    Return,
     #[token("super")]
-    SUPER,
+    Super,
     #[token("this")]
-    THIS,
+    This,
     #[token("true")]
-    TRUE,
+    True,
     #[token("var")]
-    VAR,
+    Var,
     #[token("while")]
-    WHILE,
+    While,
     #[regex(r"\n", newline_callback)]
-    NEWLINE,
+    Newline,
 }
 
 fn newline_callback(lex: &mut logos::Lexer<TokenType>) -> logos::Skip {
@@ -195,11 +195,11 @@ mod tests {
     use pretty_assertions::assert_eq;
     use test_case::test_case;
 
-    #[test_case("501+3", &[TokenType::NUMBER, TokenType::PLUS, TokenType::NUMBER], &["501", "+", "3"], &[]; "test1")]
-    #[test_case("var test = 234.1", &[TokenType::VAR, TokenType::IDENTIFIER, TokenType::EQUAL, TokenType::NUMBER], &["var", "test", "=", "234.1"], &[]; "test 2")]
-    #[test_case("var x = \"test\"", &[TokenType::VAR, TokenType::IDENTIFIER, TokenType::EQUAL, TokenType::STRING], &["var", "x", "=", "\"test\""], &[0, 0, 0, 0]; "test3")]
-    #[test_case("1\n2+3\n4", &[TokenType::NUMBER, TokenType::NUMBER, TokenType::PLUS, TokenType::NUMBER, TokenType::NUMBER], &["1", "2", "+", "3", "4"], &[0, 1, 1, 1, 2]; "test_multiline")]
-    #[test_case("print 1+2", &[TokenType::PRINT, TokenType::NUMBER, TokenType::PLUS, TokenType::NUMBER], &["print", "1", "+", "2"], &[]; "test print" )]
+    #[test_case("501+3", &[TokenType::Number, TokenType::Plus, TokenType::Number], &["501", "+", "3"], &[]; "test1")]
+    #[test_case("var test = 234.1", &[TokenType::Var, TokenType::Identifier, TokenType::Equal, TokenType::Number], &["var", "test", "=", "234.1"], &[]; "test 2")]
+    #[test_case("var x = \"test\"", &[TokenType::Var, TokenType::Identifier, TokenType::Equal, TokenType::String], &["var", "x", "=", "\"test\""], &[0, 0, 0, 0]; "test3")]
+    #[test_case("1\n2+3\n4", &[TokenType::Number, TokenType::Number, TokenType::Plus, TokenType::Number, TokenType::Number], &["1", "2", "+", "3", "4"], &[0, 1, 1, 1, 2]; "test_multiline")]
+    #[test_case("print 1+2", &[TokenType::Print, TokenType::Number, TokenType::Plus, TokenType::Number], &["print", "1", "+", "2"], &[]; "test print" )]
     pub fn test1(
         str: &str,
         expected_token: &[TokenType],
@@ -237,7 +237,7 @@ mod tests {
             result,
             [
                 Some(Ok(Token {
-                    token_type: TokenType::PLUS,
+                    token_type: TokenType::Plus,
                     start: 0,
                     end: 1,
                     line: 0

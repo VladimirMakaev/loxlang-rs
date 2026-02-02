@@ -56,7 +56,7 @@ const UPVALUES_MAX: usize = 256;
 /// Returns the clox-formatted error message for operand type errors
 fn operand_type_error_message(instruction: OpCodeTypes) -> &'static str {
     match instruction {
-        OpCodeTypes::NEGATE => "Operand must be a number.",
+        OpCodeTypes::Negate => "Operand must be a number.",
         _ => "Operands must be numbers.",
     }
 }
@@ -628,7 +628,7 @@ impl VirtualMachine {
             let (op_code, size) = x?;
             debug!("stack\n{}", self.show_stack(10));
             match op_code {
-                OpCode::CONSTANT(idx) => {
+                OpCode::Constant(idx) => {
                     let value = &self.constants[idx as usize].clone();
                     debug!(
                         "@{} CONSTANT {} [line: {}]",
@@ -638,7 +638,7 @@ impl VirtualMachine {
                     );
                     self.push(value.clone());
                 }
-                OpCode::POP => {
+                OpCode::Pop => {
                     debug!(
                         "@{} POP {} [line: {}]",
                         self.ip(),
@@ -651,7 +651,7 @@ impl VirtualMachine {
 
                     self.pop()?;
                 }
-                OpCode::ADD => {
+                OpCode::Add => {
                     let right = self.pop()?;
                     let left = self.pop()?;
 
@@ -700,9 +700,9 @@ impl VirtualMachine {
                         }
                     }
                 }
-                OpCode::MULTIPLY => {
-                    let left = self.pop_number(OpCodeTypes::MULTIPLY)?;
-                    let right = self.pop_number(OpCodeTypes::MULTIPLY)?;
+                OpCode::Multiply => {
+                    let left = self.pop_number(OpCodeTypes::Multiply)?;
+                    let right = self.pop_number(OpCodeTypes::Multiply)?;
                     debug!(
                         "@{} MULTIPLY {} {} [line: {}]",
                         self.ip(),
@@ -712,9 +712,9 @@ impl VirtualMachine {
                     );
                     self.push((left * right).into());
                 }
-                OpCode::SUBTRACT => {
-                    let right = self.pop_number(OpCodeTypes::SUBTRACT)?;
-                    let left = self.pop_number(OpCodeTypes::SUBTRACT)?;
+                OpCode::Subtract => {
+                    let right = self.pop_number(OpCodeTypes::Subtract)?;
+                    let left = self.pop_number(OpCodeTypes::Subtract)?;
                     debug!(
                         "@{} SUBTRACT {} {} [line: {}]",
                         self.ip(),
@@ -724,9 +724,9 @@ impl VirtualMachine {
                     );
                     self.push((left - right).into());
                 }
-                OpCode::DIVIDE => {
-                    let right = self.pop_number(OpCodeTypes::DIVIDE)?;
-                    let left = self.pop_number(OpCodeTypes::DIVIDE)?;
+                OpCode::Divide => {
+                    let right = self.pop_number(OpCodeTypes::Divide)?;
+                    let left = self.pop_number(OpCodeTypes::Divide)?;
                     debug!(
                         "@{} DIVIDE {} / {} [line: {}]",
                         self.ip(),
@@ -736,8 +736,8 @@ impl VirtualMachine {
                     );
                     self.push((left / right).into());
                 }
-                OpCode::NEGATE => {
-                    let value = self.pop_number(OpCodeTypes::NEGATE)?;
+                OpCode::Negate => {
+                    let value = self.pop_number(OpCodeTypes::Negate)?;
                     debug!(
                         "@{} NEGATE {} [line: {}]",
                         self.ip(),
@@ -746,7 +746,7 @@ impl VirtualMachine {
                     );
                     self.push((-value).into());
                 }
-                OpCode::NOT => {
+                OpCode::Not => {
                     let value = self.pop()?;
                     debug!(
                         "@{} NOT {} [line: {}]",
@@ -756,7 +756,7 @@ impl VirtualMachine {
                     );
                     self.push((!self.is_truthy(&value)).into());
                 }
-                OpCode::PRINT => {
+                OpCode::Print => {
                     let value = self.pop()?;
                     debug!(
                         "@{} PRINT {} [line: {}]",
@@ -766,12 +766,12 @@ impl VirtualMachine {
                     );
                     writeln!(stdout, "{}", self.as_display(value)).map_err(anyhow::Error::msg)?;
                 }
-                OpCode::TRUE => self.push(true.into()),
-                OpCode::FALSE => self.push(false.into()),
-                OpCode::NIL => self.push(Value::Nil),
-                OpCode::GREATER => {
-                    let right = self.pop_number(OpCodeTypes::GREATER)?;
-                    let left = self.pop_number(OpCodeTypes::GREATER)?;
+                OpCode::True => self.push(true.into()),
+                OpCode::False => self.push(false.into()),
+                OpCode::Nil => self.push(Value::Nil),
+                OpCode::Greater => {
+                    let right = self.pop_number(OpCodeTypes::Greater)?;
+                    let left = self.pop_number(OpCodeTypes::Greater)?;
                     debug!(
                         "@{} GREATER {} {} [line: {}]",
                         self.ip(),
@@ -781,9 +781,9 @@ impl VirtualMachine {
                     );
                     self.push((left > right).into());
                 }
-                OpCode::LESS => {
-                    let left = self.pop_number(OpCodeTypes::LESS)?;
-                    let right = self.pop_number(OpCodeTypes::LESS)?;
+                OpCode::Less => {
+                    let left = self.pop_number(OpCodeTypes::Less)?;
+                    let right = self.pop_number(OpCodeTypes::Less)?;
                     debug!(
                         "@{} LESS {} {} [line: {}]",
                         self.ip(),
@@ -793,7 +793,7 @@ impl VirtualMachine {
                     );
                     self.push((left < right).into());
                 }
-                OpCode::EQUAL => {
+                OpCode::Equal => {
                     let right = self.pop()?;
                     let left = self.pop()?;
 
@@ -807,7 +807,7 @@ impl VirtualMachine {
                         self.current_line()
                     );
                 }
-                OpCode::DECLAREGLOBAL(name_idx) => {
+                OpCode::DeclareGlobal(name_idx) => {
                     let init_value = self.pop()?;
                     debug!(
                         "@{} DEFINE_GLOBAL {}={} [line: {}]",
@@ -818,7 +818,7 @@ impl VirtualMachine {
                     );
                     self.globals.insert(name_idx, init_value);
                 }
-                OpCode::GETGLOBAL(name_idx) => {
+                OpCode::GetGlobal(name_idx) => {
                     debug!(
                         "@{} GET_GLOBAL {} [line: {}]",
                         self.ip(),
@@ -837,7 +837,7 @@ impl VirtualMachine {
                         .clone();
                     self.push(value);
                 }
-                OpCode::SETGLOBAL(name_idx) => {
+                OpCode::SetGlobal(name_idx) => {
                     let new_value = self.pop()?;
                     let name = self.interner.get_str(name_idx);
                     if !self.globals.contains_key(&name_idx) {
@@ -857,7 +857,7 @@ impl VirtualMachine {
                     self.globals.insert(name_idx, new_value.clone());
                     self.push(new_value);
                 }
-                OpCode::GETLOCAL(stack_offset) => {
+                OpCode::GetLocal(stack_offset) => {
                     let slot = self.frames[self.frame_idx].locals_idx;
                     let v = self.stack[slot + stack_offset as usize].clone();
                     debug!(
@@ -869,7 +869,7 @@ impl VirtualMachine {
                     );
                     self.push(v);
                 }
-                OpCode::SETLOCAL(slot) => {
+                OpCode::SetLocal(slot) => {
                     let new_value = self.pop()?;
                     debug!(
                         "@{} SETLOCAL {}={} [line: {}]",
@@ -886,7 +886,7 @@ impl VirtualMachine {
                         self.push(new_value);
                     }
                 }
-                OpCode::JUMP(offset) => {
+                OpCode::Jump(offset) => {
                     debug!(
                         "@{} JUMP {} [line: {}]",
                         self.ip(),
@@ -896,7 +896,7 @@ impl VirtualMachine {
                     self.frames[self.frame_idx].inc_ip(offset as usize);
                     continue;
                 }
-                OpCode::JUMPIFFALSE(offset) => {
+                OpCode::JumpIfFalse(offset) => {
                     let val = self.peek()?;
 
                     let val_bool = self.is_truthy(&val);
@@ -914,7 +914,7 @@ impl VirtualMachine {
                         continue;
                     }
                 }
-                OpCode::LOOP(offset) => {
+                OpCode::Loop(offset) => {
                     debug!(
                         "@{} LOOP {} [line: {}]",
                         self.ip(),
@@ -924,7 +924,7 @@ impl VirtualMachine {
                     self.frames[self.frame_idx].dec_ip(offset as usize);
                     continue;
                 }
-                OpCode::CALL(arg_count) => {
+                OpCode::Call(arg_count) => {
                     let arg_count = arg_count as usize;
                     let callee = &self.stack[self.stack.len() - arg_count - 1];
                     debug!(
@@ -1119,7 +1119,7 @@ impl VirtualMachine {
                         });
                     }
                 }
-                OpCode::RET => {
+                OpCode::Ret => {
                     let ret_value = self.pop()?;
                     //debug!("Last 5 values on stack:\n{}", self.show_stack(5));
                     debug!(
@@ -1141,7 +1141,7 @@ impl VirtualMachine {
 
                     continue;
                 }
-                OpCode::GETUPVALUE(slot) => {
+                OpCode::GetUpvalue(slot) => {
                     debug!(
                         "@{at} GETUPVALUE {slot} [line: {line}]",
                         at = self.ip(),
@@ -1158,7 +1158,7 @@ impl VirtualMachine {
                     };
                     self.push(value);
                 }
-                OpCode::SETUPVALUE(slot) => {
+                OpCode::SetUpvalue(slot) => {
                     let value = self.peek()?.clone();
                     debug!(
                         "@{at} SETUPVALUE {slot} = {val} [line: {line}]",
@@ -1183,7 +1183,7 @@ impl VirtualMachine {
                         }
                     }
                 }
-                OpCode::CLOSURE(function_const_idx) => {
+                OpCode::Closure(function_const_idx) => {
                     debug!(
                         "@{at} CLOSURE {function_const_idx} [line: {line}]",
                         at = self.ip(),
@@ -1235,7 +1235,7 @@ impl VirtualMachine {
 
                     continue;
                 }
-                OpCode::CLOSEUPVALUE => {
+                OpCode::CloseUpvalue => {
                     debug!(
                         "@{at} CLOSEUPVALUE {value} [line: {line}]",
                         at = self.ip(),
@@ -1247,7 +1247,7 @@ impl VirtualMachine {
                     self.close_upvalues(slot);
                     self.pop()?;
                 }
-                OpCode::CLASS(name_const_idx) => {
+                OpCode::Class(name_const_idx) => {
                     // Get class name GcRef from constants table
                     let name_value = &self.constants[name_const_idx as usize];
                     let name_ref = match name_value {
@@ -1268,7 +1268,7 @@ impl VirtualMachine {
                     let class_ref = self.alloc_class(name_ref);
                     self.push(Value::Object(class_ref));
                 }
-                OpCode::GETPROPERTY(name_const_idx) => {
+                OpCode::GetProperty(name_const_idx) => {
                     // Get property name GcRef from constants table
                     let name_value = &self.constants[name_const_idx as usize];
                     let name_ref = match name_value {
@@ -1352,7 +1352,7 @@ impl VirtualMachine {
                         });
                     }
                 }
-                OpCode::SETPROPERTY(name_const_idx) => {
+                OpCode::SetProperty(name_const_idx) => {
                     // Get property name GcRef from constants table
                     let name_value = &self.constants[name_const_idx as usize];
                     let name_ref = match name_value {
@@ -1402,7 +1402,7 @@ impl VirtualMachine {
                         });
                     }
                 }
-                OpCode::METHOD(name_const_idx) => {
+                OpCode::Method(name_const_idx) => {
                     // Get method name GcRef from constants table
                     let name_value = &self.constants[name_const_idx as usize];
                     let name_ref = match name_value {
@@ -1441,7 +1441,7 @@ impl VirtualMachine {
                         return Err(self.unhandled_error("Expected class object"));
                     }
                 }
-                OpCode::INVOKE(name_idx, arg_count) => {
+                OpCode::Invoke(name_idx, arg_count) => {
                     let arg_count = arg_count as usize;
 
                     // Get method name from constants
@@ -1632,7 +1632,7 @@ impl VirtualMachine {
                         });
                     }
                 }
-                OpCode::INHERIT => {
+                OpCode::Inherit => {
                     // Stack: [..., superclass, subclass]
                     let subclass_value = self.pop()?;
                     let superclass_value = self.peek()?; // Leave on stack for "super" local
@@ -1683,7 +1683,7 @@ impl VirtualMachine {
                         }
                     }
                 }
-                OpCode::GETSUPER(name_const_idx) => {
+                OpCode::GetSuper(name_const_idx) => {
                     // Stack: [..., receiver (this), superclass]
                     let name_value = self.constants[name_const_idx as usize].clone();
                     let name_ref = match name_value {
@@ -1734,7 +1734,7 @@ impl VirtualMachine {
                         }
                     }
                 }
-                OpCode::SUPERINVOKE(name_const_idx, arg_count) => {
+                OpCode::SuperInvoke(name_const_idx, arg_count) => {
                     // Stack: [receiver, arg1, ..., argN, superclass]
                     let arg_count = arg_count as usize;
                     let name_value = self.constants[name_const_idx as usize].clone();
@@ -1837,7 +1837,7 @@ impl VirtualMachine {
         if context.is_toplevel() {
             let ident_idx = self.interner.intern_str(ident.node());
             result.write_op(
-                OpCode::DECLAREGLOBAL(ident_idx),
+                OpCode::DeclareGlobal(ident_idx),
                 self.lookup_source_line(ident.start()),
             );
         } else {
@@ -1854,7 +1854,7 @@ impl VirtualMachine {
             }
             let offset = context.new_local(ident.node());
             result.write_op(
-                OpCode::SETLOCAL(offset as u16),
+                OpCode::SetLocal(offset as u16),
                 self.lookup_source_line(ident.start()),
             )
         }
@@ -1870,12 +1870,12 @@ impl VirtualMachine {
         match stmt.node() {
             crate::parser::Stmt::Print(expr) => {
                 self.compile_expr(expr, context, result)?;
-                result.write_op(OpCode::PRINT, self.lookup_source_line(expr.start()));
+                result.write_op(OpCode::Print, self.lookup_source_line(expr.start()));
                 Ok(())
             }
             crate::parser::Stmt::Expression(expr) => {
                 self.compile_expr(expr, context, result)?;
-                result.write_op(OpCode::POP, self.lookup_source_line(expr.end()));
+                result.write_op(OpCode::Pop, self.lookup_source_line(expr.end()));
                 Ok(())
             }
 
@@ -1894,8 +1894,8 @@ impl VirtualMachine {
                 context.function_decl(name.node(), params.iter().map(|x| x.node().as_str()));
 
                 self.compile_statement(body, context, &mut byte_code)?;
-                byte_code.write_op(OpCode::NIL, self.lookup_source_line(body.end()));
-                byte_code.write_op(OpCode::RET, self.lookup_source_line(body.end()));
+                byte_code.write_op(OpCode::Nil, self.lookup_source_line(body.end()));
+                byte_code.write_op(OpCode::Ret, self.lookup_source_line(body.end()));
 
                 let upvalue_count = context.upvalues.len();
 
@@ -1914,7 +1914,7 @@ impl VirtualMachine {
                     self.add_constant_checked(Value::Object(function_ref), context, name.span)?;
 
                 result.write_op(
-                    OpCode::CLOSURE(function_const_idx),
+                    OpCode::Closure(function_const_idx),
                     self.lookup_source_line(name.start()),
                 );
                 for up in upvalues.iter() {
@@ -1948,13 +1948,13 @@ impl VirtualMachine {
                     if let Some(e) = expr {
                         self.compile_expr(e, context, result)?;
                     } else {
-                        result.write_op(OpCode::NIL, self.lookup_source_line(ident.start()));
+                        result.write_op(OpCode::Nil, self.lookup_source_line(ident.start()));
                     }
 
                     // Mark as initialized and store
                     context.mark_local_initialized();
                     result.write_op(
-                        OpCode::SETLOCAL(offset as u16),
+                        OpCode::SetLocal(offset as u16),
                         self.lookup_source_line(ident.start()),
                     );
                 } else {
@@ -1962,11 +1962,11 @@ impl VirtualMachine {
                     if let Some(e) = expr {
                         self.compile_expr(e, context, result)?;
                     } else {
-                        result.write_op(OpCode::NIL, self.lookup_source_line(ident.start()));
+                        result.write_op(OpCode::Nil, self.lookup_source_line(ident.start()));
                     }
                     let ident_idx = self.interner.intern_str(ident.node());
                     result.write_op(
-                        OpCode::DECLAREGLOBAL(ident_idx),
+                        OpCode::DeclareGlobal(ident_idx),
                         self.lookup_source_line(ident.start()),
                     );
                 }
@@ -1983,7 +1983,7 @@ impl VirtualMachine {
                 let name_const_idx =
                     self.add_constant_checked(Value::Object(name_ref), context, name.span)?;
                 result.write_op(
-                    OpCode::CLASS(name_const_idx),
+                    OpCode::Class(name_const_idx),
                     self.lookup_source_line(name.start()),
                 );
                 // Define class as variable (same as functions)
@@ -1995,23 +1995,23 @@ impl VirtualMachine {
                     if context.is_toplevel() {
                         let super_name_idx = self.interner.intern_str(super_ident.node());
                         result.write_op(
-                            OpCode::GETGLOBAL(super_name_idx),
+                            OpCode::GetGlobal(super_name_idx),
                             self.lookup_source_line(super_ident.start()),
                         );
                     } else if let Some(offset) = context.resolve_local(super_ident.node()) {
                         result.write_op(
-                            OpCode::GETLOCAL(offset as u16),
+                            OpCode::GetLocal(offset as u16),
                             self.lookup_source_line(super_ident.start()),
                         );
                     } else if let Some((idx, _)) = context.resolve_upvalue(super_ident.node()) {
                         result.write_op(
-                            OpCode::GETUPVALUE(idx as u16),
+                            OpCode::GetUpvalue(idx as u16),
                             self.lookup_source_line(super_ident.start()),
                         );
                     } else {
                         let super_name_idx = self.interner.intern_str(super_ident.node());
                         result.write_op(
-                            OpCode::GETGLOBAL(super_name_idx),
+                            OpCode::GetGlobal(super_name_idx),
                             self.lookup_source_line(super_ident.start()),
                         );
                     }
@@ -2020,19 +2020,19 @@ impl VirtualMachine {
                     if context.is_toplevel() {
                         let class_name_idx = self.interner.intern_str(name.node());
                         result.write_op(
-                            OpCode::GETGLOBAL(class_name_idx),
+                            OpCode::GetGlobal(class_name_idx),
                             self.lookup_source_line(name.start()),
                         );
                     } else if let Some(offset) = context.resolve_local(name.node()) {
                         result.write_op(
-                            OpCode::GETLOCAL(offset as u16),
+                            OpCode::GetLocal(offset as u16),
                             self.lookup_source_line(name.start()),
                         );
                     }
 
                     // Emit INHERIT opcode
                     result.write_op(
-                        OpCode::INHERIT,
+                        OpCode::Inherit,
                         self.lookup_source_line(super_ident.start()),
                     );
 
@@ -2048,14 +2048,14 @@ impl VirtualMachine {
                     // we're inside a synthetic block for "super" but the class is global)
                     if let Some(offset) = context.resolve_local(name.node()) {
                         result.write_op(
-                            OpCode::GETLOCAL(offset as u16),
+                            OpCode::GetLocal(offset as u16),
                             self.lookup_source_line(method.name.start()),
                         );
                     } else {
                         // Class is a global variable
                         let class_name_idx = self.interner.intern_str(name.node());
                         result.write_op(
-                            OpCode::GETGLOBAL(class_name_idx),
+                            OpCode::GetGlobal(class_name_idx),
                             self.lookup_source_line(method.name.start()),
                         );
                     }
@@ -2077,13 +2077,13 @@ impl VirtualMachine {
                     // For regular methods: return nil
                     if is_init {
                         byte_code.write_op(
-                            OpCode::GETLOCAL(0),
+                            OpCode::GetLocal(0),
                             self.lookup_source_line(method.body.end()),
                         );
                     } else {
-                        byte_code.write_op(OpCode::NIL, self.lookup_source_line(method.body.end()));
+                        byte_code.write_op(OpCode::Nil, self.lookup_source_line(method.body.end()));
                     }
-                    byte_code.write_op(OpCode::RET, self.lookup_source_line(method.body.end()));
+                    byte_code.write_op(OpCode::Ret, self.lookup_source_line(method.body.end()));
 
                     let upvalue_count = context.upvalues.len();
 
@@ -2110,7 +2110,7 @@ impl VirtualMachine {
                     )?;
 
                     result.write_op(
-                        OpCode::CLOSURE(function_const_idx),
+                        OpCode::Closure(function_const_idx),
                         self.lookup_source_line(method.name.start()),
                     );
                     for up in upvalues.iter() {
@@ -2127,7 +2127,7 @@ impl VirtualMachine {
 
                     // Emit METHOD opcode
                     result.write_op(
-                        OpCode::METHOD(method_name_const_idx),
+                        OpCode::Method(method_name_const_idx),
                         self.lookup_source_line(method.name.start()),
                     );
                 }
@@ -2141,9 +2141,9 @@ impl VirtualMachine {
                         .unwrap_or(("", false));
                     if captured {
                         result
-                            .write_op(OpCode::CLOSEUPVALUE, self.lookup_source_line(name.start()));
+                            .write_op(OpCode::CloseUpvalue, self.lookup_source_line(name.start()));
                     } else {
-                        result.write_op(OpCode::POP, self.lookup_source_line(name.start()));
+                        result.write_op(OpCode::Pop, self.lookup_source_line(name.start()));
                     }
                     context.leave_block();
                 }
@@ -2157,9 +2157,9 @@ impl VirtualMachine {
                 }
                 for (_, captured) in context.iter_locals_in_block_rev() {
                     if captured {
-                        result.write_op(OpCode::CLOSEUPVALUE, self.lookup_source_line(stmt.end()));
+                        result.write_op(OpCode::CloseUpvalue, self.lookup_source_line(stmt.end()));
                     } else {
-                        result.write_op(OpCode::POP, self.lookup_source_line(stmt.end()));
+                        result.write_op(OpCode::Pop, self.lookup_source_line(stmt.end()));
                     }
                 }
                 context.leave_block();
@@ -2174,16 +2174,16 @@ impl VirtualMachine {
                 let jump_to_else = self.next_instruction(result); //
 
                 result.write_op(
-                    OpCode::JUMPIFFALSE(std::i16::MIN),
+                    OpCode::JumpIfFalse(std::i16::MIN),
                     self.lookup_source_line(stmt.start()),
                 );
 
-                result.write_op(OpCode::POP, self.lookup_source_line(stmt.start()));
+                result.write_op(OpCode::Pop, self.lookup_source_line(stmt.start()));
 
                 self.compile_statement(then_block, context, result)?;
                 let jump_after_then = result.size();
                 result.write_op(
-                    OpCode::JUMP(std::i16::MIN),
+                    OpCode::Jump(std::i16::MIN),
                     self.lookup_source_line(stmt.start()),
                 );
                 if let Some(else_block) = else_block {
@@ -2193,7 +2193,7 @@ impl VirtualMachine {
                         self.offset_since(jump_to_else, &result),
                     );
 
-                    result.write_op(OpCode::POP, self.lookup_source_line(stmt.start()));
+                    result.write_op(OpCode::Pop, self.lookup_source_line(stmt.start()));
 
                     self.compile_statement(else_block, context, result)?;
 
@@ -2208,7 +2208,7 @@ impl VirtualMachine {
                         jump_to_else + 1,
                         self.offset_since(jump_to_else, result),
                     );
-                    result.write_op(OpCode::POP, self.lookup_source_line(stmt.end()));
+                    result.write_op(OpCode::Pop, self.lookup_source_line(stmt.end()));
                     self.patch_offset(
                         result,
                         jump_after_then + 1,
@@ -2226,10 +2226,10 @@ impl VirtualMachine {
                 self.compile_expr(condition, context, result)?;
                 let jump_out = self.next_instruction(result);
                 result.write_op(
-                    OpCode::JUMPIFFALSE(i16::MAX),
+                    OpCode::JumpIfFalse(i16::MAX),
                     self.lookup_source_line(condition.start()),
                 );
-                result.write_op(OpCode::POP, self.lookup_source_line(condition.start()));
+                result.write_op(OpCode::Pop, self.lookup_source_line(condition.start()));
                 self.compile_statement(loop_block, context, result)?;
 
                 // Check if loop body is too large
@@ -2245,10 +2245,10 @@ impl VirtualMachine {
                 }
 
                 result.write_op(
-                    OpCode::LOOP(self.offset_since(start_of_loop, result).into()),
+                    OpCode::Loop(self.offset_since(start_of_loop, result).into()),
                     self.lookup_source_line(loop_block.end()),
                 );
-                result.write_op(OpCode::POP, self.lookup_source_line(loop_block.end()));
+                result.write_op(OpCode::Pop, self.lookup_source_line(loop_block.end()));
                 self.patch_offset(result, jump_out + 1, self.offset_since(jump_out, result));
                 Ok(())
             }
@@ -2270,10 +2270,10 @@ impl VirtualMachine {
                     self.compile_expr(condition, context, result)?;
                     when_condition_fails = Some(self.next_instruction(result));
                     result.write_op(
-                        OpCode::JUMPIFFALSE(i16::MAX),
+                        OpCode::JumpIfFalse(i16::MAX),
                         self.lookup_source_line(condition.start()),
                     );
-                    result.write_op(OpCode::POP, self.lookup_source_line(condition.start()));
+                    result.write_op(OpCode::Pop, self.lookup_source_line(condition.start()));
                 }
 
                 self.compile_statement(block, context, result)?;
@@ -2295,7 +2295,7 @@ impl VirtualMachine {
                 }
 
                 result.write_op(
-                    OpCode::LOOP(self.offset_since(when_loop_starts, result).into()),
+                    OpCode::Loop(self.offset_since(when_loop_starts, result).into()),
                     self.lookup_source_line(block.end()),
                 );
 
@@ -2306,7 +2306,7 @@ impl VirtualMachine {
                         self.offset_since(when_condition_fails, result),
                     );
                 }
-                result.write_op(OpCode::POP, self.lookup_source_line(block.end()));
+                result.write_op(OpCode::Pop, self.lookup_source_line(block.end()));
                 context.leave_block();
                 Ok(())
             }
@@ -2324,16 +2324,16 @@ impl VirtualMachine {
                         ]));
                     }
                     // Empty return in init returns 'this' (slot 0)
-                    result.write_op(OpCode::GETLOCAL(0), self.lookup_source_line(stmt.start()));
-                    result.write_op(OpCode::RET, self.lookup_source_line(stmt.start()));
+                    result.write_op(OpCode::GetLocal(0), self.lookup_source_line(stmt.start()));
+                    result.write_op(OpCode::Ret, self.lookup_source_line(stmt.start()));
                 } else {
                     // Regular function/method return
                     if let Some(value) = value {
                         self.compile_expr(value, context, result)?;
                     } else {
-                        result.write_op(OpCode::NIL, self.lookup_source_line(stmt.start()));
+                        result.write_op(OpCode::Nil, self.lookup_source_line(stmt.start()));
                     }
-                    result.write_op(OpCode::RET, self.lookup_source_line(stmt.start()));
+                    result.write_op(OpCode::Ret, self.lookup_source_line(stmt.start()));
                 }
                 Ok(())
             }
@@ -2349,7 +2349,7 @@ impl VirtualMachine {
     ) -> Result<(), VirtualMachineError> {
         if let Some(offset) = context.resolve_local(name) {
             result.write_op(
-                OpCode::SETLOCAL(offset as u16),
+                OpCode::SetLocal(offset as u16),
                 self.lookup_source_line(span.start()),
             )
         } else {
@@ -2359,14 +2359,14 @@ impl VirtualMachine {
             {
                 Some((idx, _)) => {
                     result.write_op(
-                        OpCode::SETUPVALUE(idx as u16),
+                        OpCode::SetUpvalue(idx as u16),
                         self.lookup_source_line(span.start()),
                     );
                 }
                 _ => {
                     let idx = self.interner.intern_str(&name);
                     result.write_op(
-                        OpCode::SETGLOBAL(idx),
+                        OpCode::SetGlobal(idx),
                         self.lookup_source_line(span.start()),
                     );
                 }
@@ -2397,7 +2397,7 @@ impl VirtualMachine {
                         ]));
                     }
                     result.write_op(
-                        OpCode::GETLOCAL(offset as u16),
+                        OpCode::GetLocal(offset as u16),
                         self.lookup_source_line(expr.start()),
                     )
                 } else {
@@ -2407,14 +2407,14 @@ impl VirtualMachine {
                     {
                         Some((idx, _)) => {
                             result.write_op(
-                                OpCode::GETUPVALUE(idx as u16),
+                                OpCode::GetUpvalue(idx as u16),
                                 self.lookup_source_line(expr.start()),
                             );
                         }
                         None => {
                             let name_idx = self.interner.intern_str(name.as_str());
                             result.write_op(
-                                OpCode::GETGLOBAL(name_idx),
+                                OpCode::GetGlobal(name_idx),
                                 self.lookup_source_line(expr.start()),
                             )
                         }
@@ -2423,96 +2423,96 @@ impl VirtualMachine {
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NumberLiteral(num)) => {
                 let idx = self.add_constant_checked((*num).into(), context, expr.span)?;
-                result.write_op(OpCode::CONSTANT(idx), self.lookup_source_line(expr.start()));
+                result.write_op(OpCode::Constant(idx), self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::StringLiteral(s)) => {
                 let gc_ref = self.alloc_string(s.to_string());
                 let val = Value::Object(gc_ref);
                 let idx = self.add_constant_checked(val, context, expr.span)?;
-                result.write_op(OpCode::CONSTANT(idx), self.lookup_source_line(expr.start()));
+                result.write_op(OpCode::Constant(idx), self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::BoolLiteral(x)) => {
                 if *x {
-                    result.write_op(OpCode::TRUE, self.lookup_source_line(expr.start()));
+                    result.write_op(OpCode::True, self.lookup_source_line(expr.start()));
                 } else {
-                    result.write_op(OpCode::FALSE, self.lookup_source_line(expr.start()));
+                    result.write_op(OpCode::False, self.lookup_source_line(expr.start()));
                 }
             }
             crate::parser::Expression::Literal(crate::parser::AstLiteral::NilLiteral) => {
-                result.write_op(OpCode::NIL, self.lookup_source_line(expr.start()));
+                result.write_op(OpCode::Nil, self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Multiply { left, right } => {
                 self.compile_expr(&left.as_ref(), context, result)?;
                 self.compile_expr(&right.as_ref(), context, result)?;
-                result.write_op(OpCode::MULTIPLY, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::Multiply, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Divide { left, right } => {
                 self.compile_expr(&left.as_ref(), context, result)?;
                 self.compile_expr(&right.as_ref(), context, result)?;
-                result.write_op(OpCode::DIVIDE, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::Divide, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Add { left, right } => {
                 self.compile_expr(&left.as_ref(), context, result)?;
                 self.compile_expr(&right.as_ref(), context, result)?;
-                result.write_op(OpCode::ADD, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::Add, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Subtract { left, right } => {
                 self.compile_expr(&left.as_ref(), context, result)?;
                 self.compile_expr(&right.as_ref(), context, result)?;
-                result.write_op(OpCode::SUBTRACT, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::Subtract, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::UnaryNegation { expr } => {
                 self.compile_expr(expr.as_ref(), context, result)?;
-                result.write_op(OpCode::NEGATE, self.lookup_source_line(expr.start()));
+                result.write_op(OpCode::Negate, self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Grouping { expr } => {
                 self.compile_expr(&expr, context, result)?;
             }
             crate::parser::Expression::UnaryNot { expr } => {
                 self.compile_expr(expr, context, result)?;
-                result.write_op(OpCode::NOT, self.lookup_source_line(expr.start()));
+                result.write_op(OpCode::Not, self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::Greater { left, right }) => {
                 self.compile_expr(&left, context, result)?;
                 self.compile_expr(&right, context, result)?;
-                result.write_op(OpCode::GREATER, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::Greater, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::Less { left, right }) => {
                 self.compile_expr(&right, context, result)?;
                 self.compile_expr(&left, context, result)?;
-                result.write_op(OpCode::LESS, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::Less, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::GreaterEqual { left, right }) => {
                 // a >= b is equivalent to !(a < b)
                 self.compile_expr(&right, context, result)?;
                 self.compile_expr(&left, context, result)?;
-                result.write_op(OpCode::LESS, self.lookup_source_line(left.start()));
-                result.write_op(OpCode::NOT, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::Less, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::Not, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::LessEqual { left, right }) => {
                 // a <= b is equivalent to !(a > b)
                 self.compile_expr(&left, context, result)?;
                 self.compile_expr(&right, context, result)?;
-                result.write_op(OpCode::GREATER, self.lookup_source_line(left.start()));
-                result.write_op(OpCode::NOT, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::Greater, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::Not, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::Equal { left, right }) => {
                 self.compile_expr(&left, context, result)?;
                 self.compile_expr(&right, context, result)?;
-                result.write_op(OpCode::EQUAL, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::Equal, self.lookup_source_line(left.start()));
             }
             crate::parser::Expression::Logical(LogicalExpression::NotEqual { left, right }) => {
                 self.compile_expr(&left, context, result)?;
                 self.compile_expr(&right, context, result)?;
-                result.write_op(OpCode::EQUAL, self.lookup_source_line(left.start()));
-                result.write_op(OpCode::NOT, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::Equal, self.lookup_source_line(left.start()));
+                result.write_op(OpCode::Not, self.lookup_source_line(left.start()));
             }
 
             crate::parser::Expression::Logical(LogicalExpression::And { left, right }) => {
                 self.compile_expr(&left, context, result)?;
                 let pos_after_left = self.next_instruction(result);
                 result.write_op(
-                    OpCode::JUMPIFFALSE(i16::MAX),
+                    OpCode::JumpIfFalse(i16::MAX),
                     self.lookup_source_line(left.start()),
                 );
                 self.compile_expr(&right, context, result)?;
@@ -2526,12 +2526,12 @@ impl VirtualMachine {
                 self.compile_expr(&left, context, result)?;
 
                 result.write_op(
-                    OpCode::JUMPIFFALSE(6), // JUMPIFFALSE + JUMP
+                    OpCode::JumpIfFalse(6), // JUMPIFFALSE + JUMP
                     self.lookup_source_line(left.start()),
                 );
                 let jump_out = self.next_instruction(result);
                 result.write_op(
-                    OpCode::JUMP(i16::MAX),
+                    OpCode::Jump(i16::MAX),
                     self.lookup_source_line(left.start()),
                 );
                 self.compile_expr(&right, context, result)?;
@@ -2554,14 +2554,14 @@ impl VirtualMachine {
                     let name_ref = self.alloc_string(name.clone());
                     let name_idx =
                         self.add_constant_checked(Value::Object(name_ref), context, expr.span)?;
-                    result.write_op(OpCode::INVOKE(name_idx, arguments.len() as u8), line);
+                    result.write_op(OpCode::Invoke(name_idx, arguments.len() as u8), line);
                 } else {
                     // Regular call - existing logic
                     self.compile_expr(&calee, context, result)?;
                     for arg in arguments {
                         self.compile_expr(arg, context, result)?;
                     }
-                    result.write_op(OpCode::CALL(arguments.len() as u8), line);
+                    result.write_op(OpCode::Call(arguments.len() as u8), line);
                 }
             }
             crate::parser::Expression::GetProperty { object, name } => {
@@ -2573,7 +2573,7 @@ impl VirtualMachine {
                     self.add_constant_checked(Value::Object(name_ref), context, expr.span)?;
                 // Emit GET_PROPERTY opcode with constant index
                 result.write_op(
-                    OpCode::GETPROPERTY(name_const_idx),
+                    OpCode::GetProperty(name_const_idx),
                     self.lookup_source_line(expr.start()),
                 );
             }
@@ -2592,7 +2592,7 @@ impl VirtualMachine {
                     self.add_constant_checked(Value::Object(name_ref), context, expr.span)?;
                 // Emit SET_PROPERTY opcode with constant index
                 result.write_op(
-                    OpCode::SETPROPERTY(name_const_idx),
+                    OpCode::SetProperty(name_const_idx),
                     self.lookup_source_line(expr.start()),
                 );
             }
@@ -2611,9 +2611,9 @@ impl VirtualMachine {
 
                 // 'this' is always at slot 0 in method scope or via upvalue
                 if let Some(offset) = context.resolve_local("this") {
-                    result.write_op(OpCode::GETLOCAL(offset as u16), line);
+                    result.write_op(OpCode::GetLocal(offset as u16), line);
                 } else if let Some((idx, _)) = context.resolve_upvalue("this") {
-                    result.write_op(OpCode::GETUPVALUE(idx as u16), line);
+                    result.write_op(OpCode::GetUpvalue(idx as u16), line);
                 } else {
                     // Should not happen if enclosing_class is set correctly
                     panic!("'this' not found in method scope");
@@ -2638,18 +2638,18 @@ impl VirtualMachine {
 
                 // Load 'this' (receiver) onto stack
                 if let Some(offset) = context.resolve_local("this") {
-                    result.write_op(OpCode::GETLOCAL(offset as u16), line);
+                    result.write_op(OpCode::GetLocal(offset as u16), line);
                 } else if let Some((idx, _)) = context.resolve_upvalue("this") {
-                    result.write_op(OpCode::GETUPVALUE(idx as u16), line);
+                    result.write_op(OpCode::GetUpvalue(idx as u16), line);
                 } else {
                     panic!("'this' not found in method scope");
                 }
 
                 // Load 'super' (superclass) onto stack
                 if let Some(offset) = context.resolve_local("super") {
-                    result.write_op(OpCode::GETLOCAL(offset as u16), line);
+                    result.write_op(OpCode::GetLocal(offset as u16), line);
                 } else if let Some((idx, _)) = context.resolve_upvalue("super") {
-                    result.write_op(OpCode::GETUPVALUE(idx as u16), line);
+                    result.write_op(OpCode::GetUpvalue(idx as u16), line);
                 } else {
                     panic!("'super' not found in scope");
                 }
@@ -2659,7 +2659,7 @@ impl VirtualMachine {
                 let method_const_idx =
                     self.add_constant_checked(Value::Object(method_name_ref), context, expr.span)?;
 
-                result.write_op(OpCode::GETSUPER(method_const_idx), line);
+                result.write_op(OpCode::GetSuper(method_const_idx), line);
             }
         }
 

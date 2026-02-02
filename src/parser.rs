@@ -311,21 +311,21 @@ type StmtResult = Result<AstStmt, StmtError>;
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, EnumIter)]
 enum Precedence {
-    NONE = 0,
-    LOWEST,
-    ASSIGNMENT,
-    OR,
-    AND,
-    COMPARISON,
-    SUM,
-    MULT,
-    UNARY,
-    HIGHEST,
+    None = 0,
+    Lowest,
+    Assignment,
+    Or,
+    And,
+    Comparison,
+    Sum,
+    Mult,
+    Unary,
+    Highest,
 }
 
 impl Precedence {
     fn next(self) -> Self {
-        if self == Precedence::HIGHEST {
+        if self == Precedence::Highest {
             return self;
         } else {
             let value: u8 = unsafe { std::mem::transmute(self) };
@@ -429,15 +429,15 @@ impl<'source> Parser<'source> {
     }
 
     fn declaration(&mut self) -> StmtResult {
-        if self.check_token(TokenType::VAR)? {
+        if self.check_token(TokenType::Var)? {
             return self.var_declaration();
         }
 
-        if self.check_token(TokenType::FUN)? {
+        if self.check_token(TokenType::Fun)? {
             return self.fun_declaration();
         }
 
-        if self.check_token(TokenType::CLASS)? {
+        if self.check_token(TokenType::Class)? {
             return self.class_declaration();
         }
 
@@ -445,8 +445,8 @@ impl<'source> Parser<'source> {
     }
 
     fn fun_declaration(&mut self) -> StmtResult {
-        let fun_token = self.consume(TokenType::FUN)?;
-        let name = self.consume(TokenType::IDENTIFIER)?;
+        let fun_token = self.consume(TokenType::Fun)?;
+        let name = self.consume(TokenType::Identifier)?;
         let name = name.slice(self.code).to_owned().ast(name.span());
         let mut params = Vec::new();
         self.consume(TokenType::LeftParen)?;
@@ -507,14 +507,14 @@ impl<'source> Parser<'source> {
     }
 
     fn class_declaration(&mut self) -> StmtResult {
-        let class_token = self.consume(TokenType::CLASS)?;
-        let name = self.consume(TokenType::IDENTIFIER)?;
+        let class_token = self.consume(TokenType::Class)?;
+        let name = self.consume(TokenType::Identifier)?;
         let name = name.slice(self.code).to_owned().ast(name.span());
 
         // Parse optional superclass
-        let superclass = if self.check_token(TokenType::LESS)? {
-            self.consume(TokenType::LESS)?;
-            let super_name = self.consume_or_else(TokenType::IDENTIFIER, |t| {
+        let superclass = if self.check_token(TokenType::Less)? {
+            self.consume(TokenType::Less)?;
+            let super_name = self.consume_or_else(TokenType::Identifier, |t| {
                 ParseError::UnexpectedToken {
                     span: t.span(),
                     expectation: "Expect superclass name.".to_owned(),
@@ -553,7 +553,7 @@ impl<'source> Parser<'source> {
     }
 
     fn method_declaration(&mut self) -> Result<MethodDeclaration, StmtError> {
-        let name_token = self.consume(TokenType::IDENTIFIER)?;
+        let name_token = self.consume(TokenType::Identifier)?;
         let name = name_token.slice(self.code).to_owned().ast(name_token.span());
 
         self.consume(TokenType::LeftParen)?;
@@ -610,15 +610,15 @@ impl<'source> Parser<'source> {
     }
 
     fn var_declaration(&mut self) -> StmtResult {
-        let decl_token = self.consume(TokenType::VAR)?;
+        let decl_token = self.consume(TokenType::Var)?;
         // Use consume_or_else to produce "Expect variable name." error for reserved words
-        let ident_token = self.consume_or_else(TokenType::IDENTIFIER, |t| ParseError::UnexpectedToken {
+        let ident_token = self.consume_or_else(TokenType::Identifier, |t| ParseError::UnexpectedToken {
             span: t.span(),
             expectation: "Expect variable name.".to_owned(),
         })?;
         let var_ident = ident_token.slice(self.code).to_owned().ast(ident_token.span());
         let mut expr = None;
-        if let Some(_) = self.match_token(TokenType::EQUAL)? {
+        if let Some(_) = self.match_token(TokenType::Equal)? {
             expr = Some(self.expression()?);
         }
 
@@ -637,28 +637,28 @@ impl<'source> Parser<'source> {
     }
 
     fn identifier_contant(&mut self) -> ExprResult {
-        let ident = self.consume(TokenType::IDENTIFIER)?;
+        let ident = self.consume(TokenType::Identifier)?;
         Ok(Expression::Identier(ident.slice(self.code).into()).ast(ident.span()))
     }
 
     fn statement(&mut self) -> StmtResult {
-        if self.check_token(TokenType::PRINT)? {
+        if self.check_token(TokenType::Print)? {
             return self.print_statement();
         }
 
-        if self.check_token(TokenType::RETURN)? {
+        if self.check_token(TokenType::Return)? {
             return self.return_statement();
         }
 
-        if self.check_token(TokenType::IF)? {
+        if self.check_token(TokenType::If)? {
             return self.if_statement();
         }
 
-        if self.check_token(TokenType::WHILE)? {
+        if self.check_token(TokenType::While)? {
             return self.while_statement();
         }
 
-        if self.check_token(TokenType::FOR)? {
+        if self.check_token(TokenType::For)? {
             return self.for_statement();
         }
 
@@ -673,7 +673,7 @@ impl<'source> Parser<'source> {
     }
 
     fn print_statement(&mut self) -> StmtResult {
-        let print_token = self.consume(TokenType::PRINT)?;
+        let print_token = self.consume(TokenType::Print)?;
         let expr = self.expression()?;
         let span = Span::new(print_token.start(), expr.end());
         self.consume(TokenType::Semicolon)?;
@@ -681,7 +681,7 @@ impl<'source> Parser<'source> {
     }
 
     fn return_statement(&mut self) -> StmtResult {
-        let return_token = self.consume(TokenType::RETURN)?;
+        let return_token = self.consume(TokenType::Return)?;
         if let Some(semi) = self.match_token(TokenType::Semicolon)? {
             let span = Span::new(return_token.start(), semi.end());
             return Ok(Stmt::Return(
@@ -752,7 +752,7 @@ impl<'source> Parser<'source> {
     }
 
     pub fn expression(&mut self) -> ExprResult {
-        self.parse_by_precedence(Precedence::LOWEST)
+        self.parse_by_precedence(Precedence::Lowest)
     }
 
     fn parse_by_precedence(&mut self, precedence: Precedence) -> ExprResult {
@@ -838,7 +838,7 @@ impl<'source> Parser<'source> {
                 message: "Expect property name after '.'.".to_owned(),
             });
         }
-        let name_token = self.consume_or_else(TokenType::IDENTIFIER, |t| {
+        let name_token = self.consume_or_else(TokenType::Identifier, |t| {
             ParseError::UnexpectedToken {
                 span: t.span(),
                 expectation: "Expect property name after '.'.".to_owned(),
@@ -855,7 +855,7 @@ impl<'source> Parser<'source> {
 
     fn unary(&mut self) -> ExprResult {
         let operator = self.consume_next()?;
-        let expression = self.parse_by_precedence(Precedence::UNARY)?;
+        let expression = self.parse_by_precedence(Precedence::Unary)?;
         let span = Span::new(operator.start(), expression.end());
         match operator.ty() {
             TokenType::Minus => Ok(Expression::UnaryNegation {
@@ -873,8 +873,8 @@ impl<'source> Parser<'source> {
     }
 
     fn logical_and(&mut self, left: AstExpression) -> ExprResult {
-        let _ = self.consume(TokenType::AND)?;
-        let right = self.parse_by_precedence(Precedence::AND)?;
+        let _ = self.consume(TokenType::And)?;
+        let right = self.parse_by_precedence(Precedence::And)?;
         let span = Span::new(left.start(), right.end());
         Ok(Expression::Logical(LogicalExpression::And {
             left: Box::new(left),
@@ -884,8 +884,8 @@ impl<'source> Parser<'source> {
     }
 
     fn logical_or(&mut self, left: AstExpression) -> ExprResult {
-        let _ = self.consume(TokenType::OR)?;
-        let right = self.parse_by_precedence(Precedence::OR)?;
+        let _ = self.consume(TokenType::Or)?;
+        let right = self.parse_by_precedence(Precedence::Or)?;
         let span = Span::new(left.start(), right.end());
         Ok(Expression::Logical(LogicalExpression::Or {
             left: Box::new(left),
@@ -896,7 +896,7 @@ impl<'source> Parser<'source> {
 
     fn logical(&mut self, left: AstExpression) -> ExprResult {
         let operator = self.consume_next()?;
-        let right = self.parse_by_precedence(Precedence::COMPARISON)?;
+        let right = self.parse_by_precedence(Precedence::Comparison)?;
         let span = Span::new(left.start(), right.end());
         match operator.ty() {
             TokenType::BantEqual => Ok(Expression::Logical(LogicalExpression::NotEqual {
@@ -909,7 +909,7 @@ impl<'source> Parser<'source> {
                 right: Box::new(right),
             })
             .ast(span)),
-            TokenType::OR => Ok(Expression::Logical(LogicalExpression::Or {
+            TokenType::Or => Ok(Expression::Logical(LogicalExpression::Or {
                 left: Box::new(left),
                 right: Box::new(right),
             })
@@ -924,12 +924,12 @@ impl<'source> Parser<'source> {
                 right: Box::new(right),
             })
             .ast(span)),
-            TokenType::GREATER => Ok(Expression::Logical(LogicalExpression::Greater {
+            TokenType::Greater => Ok(Expression::Logical(LogicalExpression::Greater {
                 left: Box::new(left),
                 right: Box::new(right),
             })
             .ast(span)),
-            TokenType::LESS => Ok(Expression::Logical(LogicalExpression::Less {
+            TokenType::Less => Ok(Expression::Logical(LogicalExpression::Less {
                 left: Box::new(left),
                 right: Box::new(right),
             })
@@ -941,11 +941,11 @@ impl<'source> Parser<'source> {
     fn literal(&mut self) -> ExprResult {
         let next = self.consume_next()?;
         match next.ty() {
-            TokenType::NUMBER => Ok(Expression::Literal(AstLiteral::NumberLiteral(
+            TokenType::Number => Ok(Expression::Literal(AstLiteral::NumberLiteral(
                 next.slice(self.code).parse::<f64>()?,
             ))
             .ast(next.span())),
-            TokenType::STRING => {
+            TokenType::String => {
                 Ok(Expression::Literal(AstLiteral::StringLiteral(String::from({
                     &self.code[next.start() + 1..next.end() - 1]
                 })))
@@ -955,7 +955,7 @@ impl<'source> Parser<'source> {
                 span: next.span(),
                 expectation: format!(
                     "Expected either {:?} or {:?}. Got {}",
-                    TokenType::NUMBER,
+                    TokenType::Number,
                     TokenType::Star,
                     next.slice(self.code)
                 ),
@@ -964,17 +964,17 @@ impl<'source> Parser<'source> {
     }
 
     fn nil(&mut self) -> ExprResult {
-        let number = self.consume(TokenType::NIL)?;
+        let number = self.consume(TokenType::Nil)?;
         Ok(Expression::Literal(AstLiteral::NilLiteral).ast(number.span()))
     }
 
     fn bool(&mut self) -> ExprResult {
         let bool = self.consume_next()?;
         match bool.ty() {
-            TokenType::TRUE => {
+            TokenType::True => {
                 Ok(Expression::Literal(AstLiteral::BoolLiteral(true)).ast(bool.span()))
             }
-            TokenType::FALSE => {
+            TokenType::False => {
                 Ok(Expression::Literal(AstLiteral::BoolLiteral(false)).ast(bool.span()))
             }
             _ => Err(ParseError::UnsatisfiedBoolLiteral { span: bool.span() }),
@@ -992,7 +992,7 @@ impl<'source> Parser<'source> {
                 right: Box::new(right),
             }
             .ast(span)),
-            TokenType::PLUS => Ok(Expression::Add {
+            TokenType::Plus => Ok(Expression::Add {
                 left: Box::new(left),
                 right: Box::new(right),
             }
@@ -1019,7 +1019,7 @@ impl<'source> Parser<'source> {
             .map(|t| t.span())
             .unwrap_or(left.span);
 
-        self.consume(TokenType::EQUAL)?;
+        self.consume(TokenType::Equal)?;
         let rvalue = self.expression()?;
 
         match left {
@@ -1074,7 +1074,7 @@ impl<'source> Parser<'source> {
     }
 
     fn while_statement(&mut self) -> StmtResult {
-        let while_token = self.consume(TokenType::WHILE)?;
+        let while_token = self.consume(TokenType::While)?;
         self.consume(TokenType::LeftParen)?;
         let condition = self.expression()?;
         self.consume(TokenType::RightParen)?;
@@ -1088,14 +1088,14 @@ impl<'source> Parser<'source> {
     }
 
     fn for_statement(&mut self) -> StmtResult {
-        let for_token = self.consume(TokenType::FOR)?;
+        let for_token = self.consume(TokenType::For)?;
 
         self.consume(TokenType::LeftParen)?;
 
         let mut collected_errors: Vec<ParseError> = Vec::new();
 
         // Parse initializer
-        let init_stmt = if self.check_token(TokenType::VAR)? {
+        let init_stmt = if self.check_token(TokenType::Var)? {
             Some(Box::new(self.var_declaration()?))
         } else {
             if self.check_token(TokenType::Semicolon)? {
@@ -1199,7 +1199,7 @@ impl<'source> Parser<'source> {
     }
 
     fn if_statement(&mut self) -> StmtResult {
-        let if_token = self.consume(TokenType::IF)?;
+        let if_token = self.consume(TokenType::If)?;
         self.consume(TokenType::LeftParen)?;
         let condition = self.expression()?;
         self.consume(TokenType::RightParen)?;
@@ -1207,8 +1207,8 @@ impl<'source> Parser<'source> {
         let then_block = self.statement()?;
         let mut else_block = Option::None;
 
-        if self.check_token(TokenType::ELSE)? {
-            self.consume(TokenType::ELSE)?;
+        if self.check_token(TokenType::Else)? {
+            self.consume(TokenType::Else)?;
             else_block = Some(Box::new(self.statement()?));
         }
 
@@ -1226,12 +1226,12 @@ impl<'source> Parser<'source> {
     }
 
     fn this_expression(&mut self) -> ExprResult {
-        let token = self.consume(TokenType::THIS)?;
+        let token = self.consume(TokenType::This)?;
         Ok(Expression::This.ast(token.span()))
     }
 
     fn super_expression(&mut self) -> ExprResult {
-        let super_token = self.consume(TokenType::SUPER)?;
+        let super_token = self.consume(TokenType::Super)?;
 
         // Require '.' after super
         self.consume_or_else(TokenType::Dot, |t| ParseError::UnexpectedToken {
@@ -1240,7 +1240,7 @@ impl<'source> Parser<'source> {
         })?;
 
         // Require method name
-        let method_token = self.consume_or_else(TokenType::IDENTIFIER, |t| {
+        let method_token = self.consume_or_else(TokenType::Identifier, |t| {
             ParseError::UnexpectedToken {
                 span: t.span(),
                 expectation: "Expect superclass method name.".to_owned(),
@@ -1264,65 +1264,65 @@ impl<'source> Parser<'source> {
             TokenType::LeftParen => (
                 Some(Box::new(Self::grouping)),
                 Some(Box::new(Self::call)),
-                Precedence::HIGHEST,
+                Precedence::Highest,
             ),
-            TokenType::RightParen => (None, None, Precedence::NONE),
-            TokenType::NIL => (Some(Box::new(Self::nil)), None, Precedence::NONE),
-            TokenType::Bang => (Some(Box::new(Self::unary)), None, Precedence::UNARY),
-            TokenType::TRUE | TokenType::FALSE => {
-                (Some(Box::new(Self::bool)), None, Precedence::NONE)
+            TokenType::RightParen => (None, None, Precedence::None),
+            TokenType::Nil => (Some(Box::new(Self::nil)), None, Precedence::None),
+            TokenType::Bang => (Some(Box::new(Self::unary)), None, Precedence::Unary),
+            TokenType::True | TokenType::False => {
+                (Some(Box::new(Self::bool)), None, Precedence::None)
             }
             TokenType::EqualEqual
             | TokenType::BantEqual
-            | TokenType::GREATER
+            | TokenType::Greater
             | TokenType::GreaterEqual
-            | TokenType::LESS
-            | TokenType::LessEqual => (None, Some(Box::new(Self::logical)), Precedence::COMPARISON),
+            | TokenType::Less
+            | TokenType::LessEqual => (None, Some(Box::new(Self::logical)), Precedence::Comparison),
             TokenType::Minus => (
                 Some(Box::new(Self::unary)),
                 Some(Box::new(Self::binary)),
-                Precedence::SUM,
+                Precedence::Sum,
             ),
-            TokenType::PLUS => (
+            TokenType::Plus => (
                 Some(Box::new(Self::unary)),
                 Some(Box::new(Self::binary)),
-                Precedence::SUM,
+                Precedence::Sum,
             ),
             TokenType::Star => (
                 Some(Box::new(Self::unary)),
                 Some(Box::new(Self::binary)),
-                Precedence::MULT,
+                Precedence::Mult,
             ),
             TokenType::Slash => (
                 Some(Box::new(Self::unary)),
                 Some(Box::new(Self::binary)),
-                Precedence::MULT,
+                Precedence::Mult,
             ),
-            TokenType::NUMBER => (Some(Box::new(Self::literal)), None, Precedence::NONE),
-            TokenType::STRING => (Some(Box::new(Self::literal)), None, Precedence::NONE),
-            TokenType::PRINT => (None, None, Precedence::NONE),
-            TokenType::Semicolon => (None, None, Precedence::NONE),
-            TokenType::VAR => (None, None, Precedence::NONE),
-            TokenType::IDENTIFIER => (
+            TokenType::Number => (Some(Box::new(Self::literal)), None, Precedence::None),
+            TokenType::String => (Some(Box::new(Self::literal)), None, Precedence::None),
+            TokenType::Print => (None, None, Precedence::None),
+            TokenType::Semicolon => (None, None, Precedence::None),
+            TokenType::Var => (None, None, Precedence::None),
+            TokenType::Identifier => (
                 Some(Box::new(Self::identifier_contant)),
                 None,
-                Precedence::NONE,
+                Precedence::None,
             ),
-            TokenType::EQUAL => (
+            TokenType::Equal => (
                 None,
                 Some(Box::new(Self::assignment)),
-                Precedence::ASSIGNMENT,
+                Precedence::Assignment,
             ),
-            TokenType::LeftBrace | TokenType::RightBrace => (None, None, Precedence::NONE),
-            TokenType::IF | TokenType::ELSE => (None, None, Precedence::NONE),
-            TokenType::WHILE | TokenType::FOR => (None, None, Precedence::NONE),
-            TokenType::AND => (None, Some(Box::new(Self::logical_and)), Precedence::AND),
-            TokenType::OR => (None, Some(Box::new(Self::logical_or)), Precedence::AND),
-            TokenType::FUN | TokenType::Comma | TokenType::RETURN => (None, None, Precedence::NONE),
-            TokenType::Dot => (None, Some(Box::new(Self::dot)), Precedence::HIGHEST),
-            TokenType::CLASS => (None, None, Precedence::NONE),
-            TokenType::THIS => (Some(Box::new(Self::this_expression)), None, Precedence::NONE),
-            TokenType::SUPER => (Some(Box::new(Self::super_expression)), None, Precedence::NONE),
+            TokenType::LeftBrace | TokenType::RightBrace => (None, None, Precedence::None),
+            TokenType::If | TokenType::Else => (None, None, Precedence::None),
+            TokenType::While | TokenType::For => (None, None, Precedence::None),
+            TokenType::And => (None, Some(Box::new(Self::logical_and)), Precedence::And),
+            TokenType::Or => (None, Some(Box::new(Self::logical_or)), Precedence::And),
+            TokenType::Fun | TokenType::Comma | TokenType::Return => (None, None, Precedence::None),
+            TokenType::Dot => (None, Some(Box::new(Self::dot)), Precedence::Highest),
+            TokenType::Class => (None, None, Precedence::None),
+            TokenType::This => (Some(Box::new(Self::this_expression)), None, Precedence::None),
+            TokenType::Super => (Some(Box::new(Self::super_expression)), None, Precedence::None),
             _ => panic!("Not implemented token: {:?}", token),
         }
     }
