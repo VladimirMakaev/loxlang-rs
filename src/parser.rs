@@ -138,10 +138,10 @@ pub type AstReturn = Spanned<String>;
 
 #[derive(Debug, strum::Display)]
 pub enum AstLiteral {
-    NumberLiteral(f64),
-    NilLiteral,
-    BoolLiteral(bool),
-    StringLiteral(String),
+    Number(f64),
+    Nil,
+    Bool(bool),
+    Str(String),
 }
 
 #[derive(Debug, strum::Display)]
@@ -307,6 +307,13 @@ pub struct Parser<'source> {
 
 type ExprResult = Result<AstExpression, ParseError>;
 type StmtResult = Result<AstStmt, StmtError>;
+
+/// Type alias for Pratt parser rule tuple to reduce complexity
+type ParseRule<'a> = (
+    Option<Box<dyn Fn(&mut Parser<'a>) -> ExprResult>>,
+    Option<Box<dyn Fn(&mut Parser<'a>, AstExpression) -> ExprResult>>,
+    Precedence,
+);
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, EnumIter)]
@@ -942,12 +949,12 @@ impl<'source> Parser<'source> {
     fn literal(&mut self) -> ExprResult {
         let next = self.consume_next()?;
         match next.ty() {
-            TokenType::Number => Ok(Expression::Literal(AstLiteral::NumberLiteral(
+            TokenType::Number => Ok(Expression::Literal(AstLiteral::Number(
                 next.slice(self.code).parse::<f64>()?,
             ))
             .ast(next.span())),
             TokenType::String => {
-                Ok(Expression::Literal(AstLiteral::StringLiteral(String::from({
+                Ok(Expression::Literal(AstLiteral::Str(String::from({
                     &self.code[next.start() + 1..next.end() - 1]
                 })))
                 .ast(next.span()))
@@ -966,17 +973,17 @@ impl<'source> Parser<'source> {
 
     fn nil(&mut self) -> ExprResult {
         let number = self.consume(TokenType::Nil)?;
-        Ok(Expression::Literal(AstLiteral::NilLiteral).ast(number.span()))
+        Ok(Expression::Literal(AstLiteral::Nil).ast(number.span()))
     }
 
     fn bool(&mut self) -> ExprResult {
         let bool = self.consume_next()?;
         match bool.ty() {
             TokenType::True => {
-                Ok(Expression::Literal(AstLiteral::BoolLiteral(true)).ast(bool.span()))
+                Ok(Expression::Literal(AstLiteral::Bool(true)).ast(bool.span()))
             }
             TokenType::False => {
-                Ok(Expression::Literal(AstLiteral::BoolLiteral(false)).ast(bool.span()))
+                Ok(Expression::Literal(AstLiteral::Bool(false)).ast(bool.span()))
             }
             _ => Err(ParseError::UnsatisfiedBoolLiteral { span: bool.span() }),
         }
@@ -1098,44 +1105,42 @@ impl<'source> Parser<'source> {
         // Parse initializer
         let init_stmt = if self.check_token(TokenType::Var)? {
             Some(Box::new(self.var_declaration()?))
+        } else if self.check_token(TokenType::Semicolon)? {
+            self.consume(TokenType::Semicolon)?;
+            None
         } else {
-            if self.check_token(TokenType::Semicolon)? {
-                self.consume(TokenType::Semicolon)?;
-                None
-            } else {
-                match self.expression() {
-                    Ok(expression) => {
-                        self.consume_or_else(TokenType::Semicolon, |t| ParseError::UnexpectedToken {
+            match self.expression() {
+                Ok(expression) => {
+                    self.consume_or_else(TokenType::Semicolon, |t| ParseError::UnexpectedToken {
+                        span: t.span(),
+                        expectation: "Expect ';' after expression.".to_owned(),
+                    })?;
+                    let span = Span::new(expression.start(), expression.end());
+                    Some(Box::new(Stmt::Expression(expression).ast(span)))
+                }
+                Err(err) => {
+                    collected_errors.push(err);
+                    // Skip until we find right paren (not semicolon) to match clox behavior
+                    while !self.check_token(TokenType::RightParen)? {
+                        if self.lexer.next().is_none() {
+                            break;
+                        }
+                    }
+                    // Report "Expect ';' after expression" at the )
+                    if let Some(Ok(t)) = self.lexer.peek() {
+                        collected_errors.push(ParseError::UnexpectedToken {
                             span: t.span(),
                             expectation: "Expect ';' after expression.".to_owned(),
-                        })?;
-                        let span = Span::new(expression.start(), expression.end());
-                        Some(Box::new(Stmt::Expression(expression).ast(span)))
+                        });
                     }
-                    Err(err) => {
-                        collected_errors.push(err);
-                        // Skip until we find right paren (not semicolon) to match clox behavior
-                        while !self.check_token(TokenType::RightParen)? {
-                            if self.lexer.next().is_none() {
-                                break;
-                            }
-                        }
-                        // Report "Expect ';' after expression" at the )
-                        if let Some(Ok(t)) = self.lexer.peek() {
-                            collected_errors.push(ParseError::UnexpectedToken {
-                                span: t.span(),
-                                expectation: "Expect ';' after expression.".to_owned(),
-                            });
-                        }
-                        None
-                    }
+                    None
                 }
             }
         };
 
         // Parse condition - only if no errors yet from initializer
         let condition = if collected_errors.is_empty() {
-            if let Some(_) = self.match_token(TokenType::Semicolon)? {
+            if self.match_token(TokenType::Semicolon)?.is_some() {
                 None
             } else if self.check_token(TokenType::RightParen)? {
                 // No condition and no semicolon - already at end
@@ -1174,7 +1179,7 @@ impl<'source> Parser<'source> {
 
         // If we have collected errors, return them now
         if !collected_errors.is_empty() {
-            return Err(StmtError { errors: collected_errors }.into());
+            return Err(StmtError { errors: collected_errors });
         }
 
         let increment_stmt = if self.check_token(TokenType::RightParen)? {
@@ -1254,13 +1259,7 @@ impl<'source> Parser<'source> {
         Ok(Expression::Super { method }.ast(span))
     }
 
-    fn precedence(
-        token: TokenType,
-    ) -> (
-        Option<Box<dyn Fn(&mut Self) -> ExprResult>>,
-        Option<Box<dyn Fn(&mut Self, AstExpression) -> ExprResult>>,
-        Precedence,
-    ) {
+    fn precedence(token: TokenType) -> ParseRule<'source> {
         match token {
             TokenType::LeftParen => (
                 Some(Box::new(Self::grouping)),
@@ -1380,7 +1379,7 @@ mod tests {
     #[cfg(test)]
     fn eval_bool(expression: &AstExpression) -> bool {
         match &expression.node {
-            Expression::Literal(AstLiteral::BoolLiteral(x)) => *x,
+            Expression::Literal(AstLiteral::Bool(x)) => *x,
             Expression::Literal(_) => unimplemented!(),
             Expression::Multiply { left: _, right: _ } => todo!(),
             Expression::Divide { left: _, right: _ } => todo!(),
@@ -1426,7 +1425,7 @@ mod tests {
     #[cfg(test)]
     fn eval(expression: &AstExpression) -> f64 {
         match &expression.node {
-            Expression::Literal(AstLiteral::NumberLiteral(x)) => *x,
+            Expression::Literal(AstLiteral::Number(x)) => *x,
             Expression::Literal(_) => unimplemented!(),
             Expression::Add { left, right } => {
                 let x = eval(left.as_ref());

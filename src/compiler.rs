@@ -112,14 +112,14 @@ impl Compiler {
                     }
                 }
             }
-            crate::parser::Expression::Literal(crate::parser::AstLiteral::NumberLiteral(num)) => {
+            crate::parser::Expression::Literal(crate::parser::AstLiteral::Number(num)) => {
                 result.write_op(
                     OpCode::CONSTANT(self.constants.len() as u16),
                     self.lookup_source_line(expr.start()),
                 );
                 self.add_constant((*num).into());
             }
-            crate::parser::Expression::Literal(crate::parser::AstLiteral::StringLiteral(s)) => {
+            crate::parser::Expression::Literal(crate::parser::AstLiteral::Str(s)) => {
                 let val = Value::String(self.interner.intern_str(s));
                 result.write_op(
                     OpCode::CONSTANT(self.constants.len() as u16),
@@ -127,14 +127,14 @@ impl Compiler {
                 );
                 self.add_constant(val);
             }
-            crate::parser::Expression::Literal(crate::parser::AstLiteral::BoolLiteral(x)) => {
+            crate::parser::Expression::Literal(crate::parser::AstLiteral::Bool(x)) => {
                 if *x {
                     result.write_op(OpCode::TRUE, self.lookup_source_line(expr.start()));
                 } else {
                     result.write_op(OpCode::FALSE, self.lookup_source_line(expr.start()));
                 }
             }
-            crate::parser::Expression::Literal(crate::parser::AstLiteral::NilLiteral) => {
+            crate::parser::Expression::Literal(crate::parser::AstLiteral::Nil) => {
                 result.write_op(OpCode::NIL, self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Multiply { left, right } => {

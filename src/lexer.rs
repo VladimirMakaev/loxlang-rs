@@ -147,7 +147,7 @@ impl<'source> Iterator for Lexer<'source> {
     type Item = Result<Token, LexerError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.next()
+        self.next_token()
     }
 }
 
@@ -158,7 +158,7 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    pub fn next(&mut self) -> Option<Result<Token, LexerError>> {
+    pub fn next_token(&mut self) -> Option<Result<Token, LexerError>> {
         match self.logos_lexer.next() {
             Some(Ok(t)) => Some(Ok(Token {
                 start: self.logos_lexer.span().start,
@@ -211,7 +211,7 @@ mod tests {
         let mut values = Vec::new();
         let mut lines = Vec::new();
 
-        while let Some(Ok(t)) = l.next() {
+        while let Some(Ok(t)) = l.next_token() {
             tokens.push(t.ty());
             values.push(t.slice(str));
             lines.push(t.line);
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     pub fn test_error() {
         let mut l = Lexer::new("+\"sdf");
-        let result = [l.next(), l.next(), l.next()];
+        let result = [l.next_token(), l.next_token(), l.next_token()];
         assert_eq!(
             result,
             [

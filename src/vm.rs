@@ -2423,24 +2423,24 @@ impl VirtualMachine {
                     }
                 }
             }
-            crate::parser::Expression::Literal(crate::parser::AstLiteral::NumberLiteral(num)) => {
+            crate::parser::Expression::Literal(crate::parser::AstLiteral::Number(num)) => {
                 let idx = self.add_constant_checked((*num).into(), context, expr.span)?;
                 result.write_op(OpCode::Constant(idx), self.lookup_source_line(expr.start()));
             }
-            crate::parser::Expression::Literal(crate::parser::AstLiteral::StringLiteral(s)) => {
+            crate::parser::Expression::Literal(crate::parser::AstLiteral::Str(s)) => {
                 let gc_ref = self.alloc_string(s.to_string());
                 let val = Value::Object(gc_ref);
                 let idx = self.add_constant_checked(val, context, expr.span)?;
                 result.write_op(OpCode::Constant(idx), self.lookup_source_line(expr.start()));
             }
-            crate::parser::Expression::Literal(crate::parser::AstLiteral::BoolLiteral(x)) => {
+            crate::parser::Expression::Literal(crate::parser::AstLiteral::Bool(x)) => {
                 if *x {
                     result.write_op(OpCode::True, self.lookup_source_line(expr.start()));
                 } else {
                     result.write_op(OpCode::False, self.lookup_source_line(expr.start()));
                 }
             }
-            crate::parser::Expression::Literal(crate::parser::AstLiteral::NilLiteral) => {
+            crate::parser::Expression::Literal(crate::parser::AstLiteral::Nil) => {
                 result.write_op(OpCode::Nil, self.lookup_source_line(expr.start()));
             }
             crate::parser::Expression::Multiply { left, right } => {
