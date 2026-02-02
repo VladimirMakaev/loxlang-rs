@@ -119,6 +119,7 @@ struct OpenUpValues {
 }
 
 impl OpenUpValues {
+    #[allow(dead_code)]
     pub fn take(&mut self, stack_slot: usize) -> Option<GcRef> {
         self.slots_to_values.remove(&stack_slot)
     }
@@ -478,6 +479,7 @@ impl VirtualMachine {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn add_constant(&mut self, v: Value) {
         self.constants.push(v);
     }

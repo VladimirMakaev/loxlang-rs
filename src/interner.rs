@@ -92,12 +92,12 @@ impl<H: BuildHasher> Interner<H> {
     pub fn new(hasher: H) -> Self {
         Interner {
             raw_table: Default::default(),
-            hasher: hasher,
+            hasher,
             all_strings: Default::default(),
         }
     }
 
-    pub fn intern_str<'a>(&'a mut self, val: &str) -> StrId {
+    pub fn intern_str(&mut self, val: &str) -> StrId {
         let h = |x: &_| self.hasher.hash_one(x);
         if let Some(idx) = self.raw_table.find(h(val), |str_idx| {
             val.eq(self.all_strings[*str_idx].as_str())
@@ -108,7 +108,7 @@ impl<H: BuildHasher> Interner<H> {
         }
     }
 
-    pub fn intern_string<'a>(&'a mut self, val: String) -> StrId {
+    pub fn intern_string(&mut self, val: String) -> StrId {
         let h = |x: &_| self.hasher.hash_one(x);
         if let Some(idx) = self.raw_table.find(h(val.as_str()), |str_idx| {
             val.eq(self.all_strings[*str_idx].as_str())
@@ -128,7 +128,7 @@ impl<H: BuildHasher> Interner<H> {
         idx.into()
     }
 
-    pub fn get_str<'a>(&'a self, key: StrId) -> &'a str {
+    pub fn get_str(&self, key: StrId) -> &str {
         self.all_strings[key.idx as usize].as_str()
     }
 }

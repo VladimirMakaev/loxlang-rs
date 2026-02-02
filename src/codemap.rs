@@ -33,10 +33,9 @@ impl Codemap {
     fn index_lines(code: &str) -> BTreeMap<usize, usize> {
         let mut line_starts = BTreeMap::new();
         let mut line = 0;
-        let mut char_index = 0;
         let mut line_stared = true;
 
-        for c in code.chars() {
+        for (char_index, c) in code.chars().enumerate() {
             if line_stared {
                 line_starts.insert(char_index, line);
                 line_stared = false;
@@ -45,7 +44,6 @@ impl Codemap {
                 line_stared = true;
                 line += 1;
             }
-            char_index += 1;
         }
         line_starts
     }

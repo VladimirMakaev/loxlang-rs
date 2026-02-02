@@ -77,9 +77,9 @@ pub enum ParseError {
     UninitializedLocal { span: Span },
 }
 
-impl Into<Vec<ParseError>> for ParseError {
-    fn into(self) -> Vec<ParseError> {
-        vec![self]
+impl From<ParseError> for Vec<ParseError> {
+    fn from(val: ParseError) -> Self {
+        vec![val]
     }
 }
 
@@ -106,7 +106,7 @@ impl Span {
         Self { start, end }
     }
 
-    pub fn slice<'a, 'b>(&'a self, code: &'b str) -> &'b str {
+    pub fn slice<'b>(&self, code: &'b str) -> &'b str {
         &code[self.start..self.end]
     }
 }
@@ -326,17 +326,17 @@ enum Precedence {
 impl Precedence {
     fn next(self) -> Self {
         if self == Precedence::Highest {
-            return self;
+            self
         } else {
             let value: u8 = unsafe { std::mem::transmute(self) };
-            unsafe { std::mem::transmute(value + 1) }
+            unsafe { std::mem::transmute::<u8, Precedence>(value + 1) }
         }
     }
 }
 
-impl Into<u8> for Precedence {
-    fn into(self) -> u8 {
-        unsafe { std::mem::transmute(self) }
+impl From<Precedence> for u8 {
+    fn from(val: Precedence) -> Self {
+        unsafe { std::mem::transmute(val) }
     }
 }
 
@@ -422,9 +422,10 @@ impl<'source> Parser<'source> {
     }
 
     fn next_declaration(&mut self) -> Option<StmtResult> {
-        match self.lexer.peek() {
-            Some(_) => Some(self.declaration()),
-            None => None,
+        if self.lexer.peek().is_some() {
+            Some(self.declaration())
+        } else {
+            None
         }
     }
 
@@ -459,7 +460,7 @@ impl<'source> Parser<'source> {
                 } = self.identifier_contant()?
                 {
                     if params.len() == u8::MAX as usize {
-                        return Err(ParseError::MaxFunDeclarationParameters { span: span }.into());
+                        return Err(ParseError::MaxFunDeclarationParameters { span }.into());
                     }
 
                     // Check for duplicate parameter name
@@ -499,7 +500,7 @@ impl<'source> Parser<'source> {
         Ok(
             Stmt::Declarations(StmtDeclaration::Function(FunDeclaration {
                 name,
-                params: params,
+                params,
                 body: Box::new(block),
             }))
             .ast(span),
@@ -567,7 +568,7 @@ impl<'source> Parser<'source> {
                 } = self.identifier_contant()?
                 {
                     if params.len() == u8::MAX as usize {
-                        return Err(ParseError::MaxFunDeclarationParameters { span: span }.into());
+                        return Err(ParseError::MaxFunDeclarationParameters { span }.into());
                     }
 
                     // Check for duplicate parameter name
@@ -618,7 +619,7 @@ impl<'source> Parser<'source> {
         })?;
         let var_ident = ident_token.slice(self.code).to_owned().ast(ident_token.span());
         let mut expr = None;
-        if let Some(_) = self.match_token(TokenType::Equal)? {
+        if self.match_token(TokenType::Equal)?.is_some() {
             expr = Some(self.expression()?);
         }
 
@@ -631,7 +632,7 @@ impl<'source> Parser<'source> {
 
         Ok(Stmt::Declarations(StmtDeclaration::Variable {
             ident: var_ident,
-            expr: expr,
+            expr,
         })
         .ast(span))
     }
@@ -774,12 +775,12 @@ impl<'source> Parser<'source> {
                         break;
                     }
                 }
-                return Ok(result);
+                Ok(result)
             } else {
-                return Err(ParseError::ExpectedExpression { span: token.span() });
+                Err(ParseError::ExpectedExpression { span: token.span() })
             }
         } else {
-            return Err(ParseError::UnexpectedEof { last_position: self.last_position });
+            Err(ParseError::UnexpectedEof { last_position: self.last_position })
         }
     }
 
@@ -1218,7 +1219,7 @@ impl<'source> Parser<'source> {
         );
 
         Ok(Stmt::If(IfStmt {
-            condition: condition,
+            condition,
             then_block: Box::new(then_block),
             else_block,
         })

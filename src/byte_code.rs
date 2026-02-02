@@ -1,4 +1,4 @@
-use std::{iter::repeat, mem::size_of};
+use std::mem::size_of;
 
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -26,7 +26,7 @@ impl JumpOffset {
 
 impl From<JumpOffset> for i16 {
     fn from(value: JumpOffset) -> Self {
-        return value.0;
+        value.0
     }
 }
 
@@ -150,7 +150,7 @@ impl ByteCode {
         }
 
         self.code
-            .push(unsafe { std::mem::transmute(std::mem::discriminant(&op)) });
+            .push(unsafe { std::mem::transmute::<std::mem::Discriminant<OpCode>, u8>(std::mem::discriminant(&op)) });
 
         let bytes_count = match op {
             OpCode::Constant(idx) => write_one_u16(&mut self.code, idx),
@@ -169,7 +169,7 @@ impl ByteCode {
                 write_one_i16(&mut self.code, offset)
             }
             OpCode::Call(arg_count) => {
-                self.code.push(arg_count as u8);
+                self.code.push(arg_count);
                 1
             }
             OpCode::Invoke(name_idx, arg_count) => {
@@ -185,7 +185,7 @@ impl ByteCode {
             }
             _ => 0,
         };
-        self.lines.extend(repeat(line).take(bytes_count + 1));
+        self.lines.extend(std::iter::repeat_n(line, bytes_count + 1));
     }
 }
 
