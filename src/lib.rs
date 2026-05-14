@@ -10,5 +10,6 @@ pub mod interner;
 pub mod lexer;
 pub mod object;
 pub mod parser;
+pub mod stats;
 pub mod value;
 pub mod vm;

@@ -23,6 +23,7 @@ use crate::{
         AstExpression, AstIdent, AstStmt, ClassDeclaration, Expression, ForStmt, FunDeclaration,
         IfStmt, LogicalExpression, ParseError, Parser, Span, StmtDeclaration, WhileStmt,
     },
+    stats::PerfCounters,
     value::{Value, ValueTypes},
 };
 
@@ -165,6 +166,8 @@ pub struct VirtualMachine {
     script_closure: Option<GcRef>,
     /// Monotonic time for clock() native function
     clock_start: Instant,
+    /// Optional performance counters for deterministic profiling
+    counters: Option<Box<PerfCounters>>,
 }
 
 impl Default for VirtualMachine {
@@ -192,6 +195,7 @@ impl VirtualMachine {
             heap: Heap::new(),
             script_closure: None,
             clock_start: Instant::now(),
+            counters: None,
         };
         vm.define_native("clock", 0);
         vm
@@ -203,6 +207,14 @@ impl VirtualMachine {
         let native_obj = Obj::native(name, arity);
         let native_ref = self.heap.alloc(native_obj);
         self.globals.insert(name_id, Value::Object(native_ref));
+    }
+
+    pub fn enable_stats(&mut self) {
+        self.counters = Some(Box::new(PerfCounters::new()));
+    }
+
+    pub fn take_counters(&mut self) -> Option<Box<PerfCounters>> {
+        self.counters.take()
     }
 
     // =========================================================================
@@ -403,7 +415,6 @@ impl VirtualMachine {
 
     /// Run garbage collection
     pub fn collect_garbage(&mut self) {
-        #[cfg(feature = "debug_gc")]
         let before = self.heap.bytes_allocated;
 
         #[cfg(feature = "debug_gc")]
@@ -426,19 +437,24 @@ impl VirtualMachine {
         // Update threshold
         self.heap.update_threshold();
 
-        #[cfg(feature = "debug_gc")]
-        {
-            let after = self.heap.bytes_allocated;
-            eprintln!(
-                "-- gc end ({} bytes, freed {})",
-                after,
-                before.saturating_sub(after)
-            );
+        let after = self.heap.bytes_allocated;
+        if let Some(c) = &mut self.counters {
+            c.record_gc(before.saturating_sub(after));
         }
+
+        #[cfg(feature = "debug_gc")]
+        eprintln!(
+            "-- gc end ({} bytes, freed {})",
+            after,
+            before.saturating_sub(after)
+        );
     }
 
     /// Check if GC should run and trigger if needed
     fn maybe_collect(&mut self) {
+        if let Some(c) = &mut self.counters {
+            c.record_allocation();
+        }
         if self.heap.bytes_allocated > self.heap.next_gc {
             self.collect_garbage();
         }
@@ -510,6 +526,9 @@ impl VirtualMachine {
 
     fn push(&mut self, v: Value) {
         self.stack.push(v);
+        if let Some(c) = &mut self.counters {
+            c.record_stack_depth(self.stack.len());
+        }
     }
 
     fn pop(&mut self) -> Result<Value, VirtualMachineError> {
@@ -635,6 +654,12 @@ impl VirtualMachine {
 
         while let Some(x) = self.next_op() {
             let (op_code, size) = x?;
+            if let Some(c) = &mut self.counters {
+                let disc = unsafe {
+                    *(&op_code as *const OpCode as *const u8)
+                };
+                c.record_instruction(disc);
+            }
             debug!("stack\n{}", self.show_stack(10));
             match op_code {
                 OpCode::Constant(idx) => {
@@ -981,6 +1006,9 @@ impl VirtualMachine {
                                     locals_idx: self.stack.len() - arg_count - 1,
                                 });
                                 self.frame_idx += 1;
+                                if let Some(c) = &mut self.counters {
+                                    c.record_call(self.frame_idx);
+                                }
                                 continue;
                             }
                             ObjKind::Class(class) => {
@@ -1026,6 +1054,9 @@ impl VirtualMachine {
                                         locals_idx: stack_pos,
                                     });
                                     self.frame_idx += 1;
+                                    if let Some(c) = &mut self.counters {
+                                        c.record_call(self.frame_idx);
+                                    }
                                     continue;
                                 } else if arg_count != 0 {
                                     // No init method but arguments provided
@@ -1077,6 +1108,9 @@ impl VirtualMachine {
                                     locals_idx: stack_pos,
                                 });
                                 self.frame_idx += 1;
+                                if let Some(c) = &mut self.counters {
+                                    c.record_call(self.frame_idx);
+                                }
                                 continue;
                             }
                             ObjKind::Native(native) => {
@@ -1513,6 +1547,9 @@ impl VirtualMachine {
                                                     locals_idx: receiver_pos,
                                                 });
                                                 self.frame_idx += 1;
+                                                if let Some(c) = &mut self.counters {
+                                                    c.record_call(self.frame_idx);
+                                                }
                                                 continue;
                                             }
                                             ObjKind::BoundMethod(bound) => {
@@ -1551,6 +1588,9 @@ impl VirtualMachine {
                                                     locals_idx: receiver_pos,
                                                 });
                                                 self.frame_idx += 1;
+                                                if let Some(c) = &mut self.counters {
+                                                    c.record_call(self.frame_idx);
+                                                }
                                                 continue;
                                             }
                                             _ => {
@@ -1601,6 +1641,9 @@ impl VirtualMachine {
                                             locals_idx: receiver_pos,
                                         });
                                         self.frame_idx += 1;
+                                        if let Some(c) = &mut self.counters {
+                                            c.record_call(self.frame_idx);
+                                        }
                                         continue;
                                     } else {
                                         // Neither field nor method found
@@ -1807,6 +1850,9 @@ impl VirtualMachine {
                                 locals_idx,
                             });
                             self.frame_idx += 1;
+                            if let Some(c) = &mut self.counters {
+                                c.record_call(self.frame_idx);
+                            }
 
                             continue;
                         }

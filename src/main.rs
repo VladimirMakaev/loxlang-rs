@@ -19,6 +19,7 @@ mod interner;
 mod lexer;
 mod object;
 mod parser;
+mod stats;
 #[cfg(test)]
 mod tests;
 mod value;
@@ -28,6 +29,8 @@ mod vm;
 struct App {
     #[arg(long)]
     decompile: bool,
+    #[arg(long, num_args = 0..=1, default_missing_value = "", require_equals = true)]
+    stats: Option<String>,
     file: PathBuf,
 }
 
@@ -43,6 +46,9 @@ fn main() -> anyhow::Result<()> {
     BufReader::new(File::open(&opts.file)?).read_to_string(&mut code)?;
     let codemap = Codemap::new(&code);
     let mut vm = VirtualMachine::new();
+    if opts.stats.is_some() {
+        vm.enable_stats();
+    }
     if let Err(err) = vm.compile(&code) {
         writeln!(
             &mut stderr(),
@@ -70,6 +76,15 @@ fn main() -> anyhow::Result<()> {
             }
         )?;
         exit(70);
+    }
+    if let Some(stats_path) = &opts.stats {
+        if let Some(counters) = vm.take_counters() {
+            if stats_path.is_empty() {
+                counters.print_summary(&mut stderr())?;
+            } else {
+                counters.write_json(std::path::Path::new(stats_path))?;
+            }
+        }
     }
     Ok(())
 }

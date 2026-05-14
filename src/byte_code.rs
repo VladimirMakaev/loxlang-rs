@@ -189,8 +189,8 @@ impl ByteCode {
     }
 }
 
-#[derive(Debug, strum::FromRepr, PartialEq, strum::AsRefStr, strum::EnumDiscriminants)]
-#[strum_discriminants(name(OpCodeTypes), derive(strum::Display), derive(strum::FromRepr))]
+#[derive(Debug, strum::FromRepr, PartialEq, strum::AsRefStr, strum::EnumDiscriminants, strum::EnumCount)]
+#[strum_discriminants(name(OpCodeTypes), derive(strum::Display, strum::FromRepr))]
 #[repr(u8)]
 pub enum OpCode {
     Constant(u16) = 1,
