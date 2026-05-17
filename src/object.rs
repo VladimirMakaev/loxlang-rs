@@ -52,6 +52,14 @@ pub struct ObjFunction {
     pub arity: usize,
     pub code: ByteCode,
     pub upvalue_count: usize,
+    /// Names of the locals occupying each frame slot at the moment of
+    /// compilation. Slot 0 is the closure (or `this` for methods); slots
+    /// 1..=arity are parameters; remaining slots are user-declared locals.
+    /// Reused slots keep the most recent name. Carried per-function so that
+    /// tooling (debuggers, REPLs, tracing) can recover identifier names
+    /// from a stack slot at runtime.
+    #[allow(dead_code)]
+    pub local_names: Vec<String>,
 }
 
 /// An upvalue object for closure variable capture.
@@ -121,7 +129,13 @@ impl Obj {
     }
 
     /// Creates a new function object.
-    pub fn function(name: GcRef, arity: usize, code: ByteCode, upvalue_count: usize) -> Self {
+    pub fn function(
+        name: GcRef,
+        arity: usize,
+        code: ByteCode,
+        upvalue_count: usize,
+        local_names: Vec<String>,
+    ) -> Self {
         Obj {
             is_marked: false,
             kind: ObjKind::Function(ObjFunction {
@@ -129,6 +143,7 @@ impl Obj {
                 arity,
                 code,
                 upvalue_count,
+                local_names,
             }),
         }
     }

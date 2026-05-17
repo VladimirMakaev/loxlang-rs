@@ -243,16 +243,18 @@ impl VirtualMachine {
         r
     }
 
-    /// Allocate a function on the heap.
+    /// Allocate a function on the heap. `local_names` carries the
+    /// slot-to-name table captured at compile time (see [`LexicalScope::slot_names_snapshot`]).
     pub fn alloc_function(
         &mut self,
         name: GcRef,
         arity: usize,
         code: ByteCode,
         upvalue_count: usize,
+        local_names: Vec<String>,
     ) -> GcRef {
         self.maybe_collect();
-        let obj = Obj::function(name, arity, code, upvalue_count);
+        let obj = Obj::function(name, arity, code, upvalue_count, local_names);
         self.heap.alloc(obj)
     }
 
@@ -493,7 +495,8 @@ impl VirtualMachine {
         // Create script function and closure on heap
         let name_ref = self.alloc_string("<script>".to_string());
         let upvalue_count = context.upvalues.len();
-        let function_ref = self.alloc_function(name_ref, 0, result, upvalue_count);
+        let local_names = context.slot_names_snapshot();
+        let function_ref = self.alloc_function(name_ref, 0, result, upvalue_count, local_names);
 
         // TODO(03-08): Closure upvalues are empty - fix in Plan 03-08
         let closure_ref = self.alloc_closure(function_ref, vec![]);
@@ -1952,11 +1955,17 @@ impl VirtualMachine {
                 byte_code.write_op(OpCode::Ret, self.lookup_source_line(body.end()));
 
                 let upvalue_count = context.upvalues.len();
+                let local_names = context.slot_names_snapshot();
 
                 // Create function on heap
                 let name_ref = self.alloc_string(name.node.clone());
-                let function_ref =
-                    self.alloc_function(name_ref, params.len(), byte_code, upvalue_count);
+                let function_ref = self.alloc_function(
+                    name_ref,
+                    params.len(),
+                    byte_code,
+                    upvalue_count,
+                    local_names,
+                );
 
                 // Store upvalues info before leaving function context
                 let upvalues: Vec<_> = context.upvalues.iter().map(|(_, up)| *up).collect();
@@ -2140,6 +2149,7 @@ impl VirtualMachine {
                     byte_code.write_op(OpCode::Ret, self.lookup_source_line(method.body.end()));
 
                     let upvalue_count = context.upvalues.len();
+                    let local_names = context.slot_names_snapshot();
 
                     // Create function on heap
                     let method_name_ref = self.alloc_string(method.name.node.clone());
@@ -2148,6 +2158,7 @@ impl VirtualMachine {
                         method.params.len(),
                         byte_code,
                         upvalue_count,
+                        local_names,
                     );
 
                     // Store upvalues info before leaving function context
@@ -2785,6 +2796,12 @@ pub struct LexicalScope<'a> {
     function_type: FunctionType,
     enclosing_class: Option<ClassContext>, // Some if inside a class body
     constants_count: usize,                // Track constants per function for limit check
+    /// Name of every stack slot ever declared in this function, indexed by
+    /// slot. Slot 0 is the closure (or `this` for methods); slots 1..=arity
+    /// are parameters; remaining slots are user locals. Slots reused after
+    /// a block exits keep the most recent name. Snapshotted into
+    /// `ObjFunction::local_names` when the function compile completes.
+    slot_names: Vec<String>,
 }
 
 impl<'a> LexicalScope<'a> {
@@ -2812,19 +2829,23 @@ impl<'a> LexicalScope<'a> {
             function_type: FunctionType::Script,
             enclosing_class: None,
             constants_count: 0,
+            // Slot 0 of the script frame is reserved for the script closure.
+            slot_names: vec!["<script>".to_string()],
         }
     }
 
     pub fn function_decl(&mut self, name: &'a str, args: impl IntoIterator<Item = &'a str>) {
         let enclosing_class = self.enclosing_class;
+        let arg_pairs: Vec<(&'a str, bool)> = {
+            let mut a = Vec::new();
+            a.push((name, false));
+            a.extend(args.into_iter().map(|x| (x, false)));
+            a
+        };
+        let slot_names: Vec<String> = arg_pairs.iter().map(|(n, _)| (*n).to_string()).collect();
         let new = Self {
             parent: None,
-            args: {
-                let mut a = Vec::new();
-                a.push((name, false));
-                a.extend(args.into_iter().map(|x| (x, false)));
-                a
-            },
+            args: arg_pairs,
             block_depth: self.block_depth,
             locals: Default::default(),
             upvalues: Vec::with_capacity(self.locals.len() + self.upvalues.len()),
@@ -2836,6 +2857,7 @@ impl<'a> LexicalScope<'a> {
             function_type: FunctionType::Function,
             enclosing_class,
             constants_count: 0,
+            slot_names,
         };
 
         let prev = mem::replace(self, new);
@@ -2857,15 +2879,17 @@ impl<'a> LexicalScope<'a> {
             FunctionType::Method
         };
 
+        let arg_pairs: Vec<(&'a str, bool)> = {
+            let mut a = Vec::new();
+            // Slot 0 is "this" for methods (instead of function name)
+            a.push(("this", false));
+            a.extend(args.into_iter().map(|x| (x, false)));
+            a
+        };
+        let slot_names: Vec<String> = arg_pairs.iter().map(|(n, _)| (*n).to_string()).collect();
         let new = Self {
             parent: None,
-            args: {
-                let mut a = Vec::new();
-                // Slot 0 is "this" for methods (instead of function name)
-                a.push(("this", false));
-                a.extend(args.into_iter().map(|x| (x, false)));
-                a
-            },
+            args: arg_pairs,
             block_depth: self.block_depth,
             locals: Default::default(),
             upvalues: Vec::with_capacity(self.locals.len() + self.upvalues.len()),
@@ -2877,6 +2901,7 @@ impl<'a> LexicalScope<'a> {
             function_type,
             enclosing_class: Some(ClassContext { has_superclass }),
             constants_count: 0,
+            slot_names,
         };
 
         let prev = mem::replace(self, new);
@@ -2911,6 +2936,7 @@ impl<'a> LexicalScope<'a> {
             function_type,
             enclosing_class,
             constants_count,
+            slot_names,
         } = *parent;
         self.args = args;
         self.block_depth = block_depth;
@@ -2921,6 +2947,7 @@ impl<'a> LexicalScope<'a> {
         self.function_type = function_type;
         self.enclosing_class = enclosing_class;
         self.constants_count = constants_count;
+        self.slot_names = slot_names;
     }
 
     pub fn enter_block(&mut self) {
@@ -2943,7 +2970,9 @@ impl<'a> LexicalScope<'a> {
 
     pub fn new_local(&mut self, name: &'a str) -> usize {
         self.locals.push((name, self.block_depth, false));
-        self.args.len() + self.locals.len() - 1
+        let slot = self.args.len() + self.locals.len() - 1;
+        self.record_slot_name(slot, name);
+        slot
     }
 
     /// Declare a local variable as uninitialized (depth set to SENTINEL).
@@ -2951,7 +2980,25 @@ impl<'a> LexicalScope<'a> {
     pub fn declare_local_uninitialized(&mut self, name: &'a str) -> usize {
         // Use usize::MAX as sentinel for "uninitialized"
         self.locals.push((name, usize::MAX, false));
-        self.args.len() + self.locals.len() - 1
+        let slot = self.args.len() + self.locals.len() - 1;
+        self.record_slot_name(slot, name);
+        slot
+    }
+
+    /// Record the source identifier for `slot` in this function's
+    /// debug-info table. Grows the table sparsely if needed.
+    fn record_slot_name(&mut self, slot: usize, name: &str) {
+        if self.slot_names.len() <= slot {
+            self.slot_names.resize(slot + 1, String::new());
+        }
+        self.slot_names[slot] = name.to_string();
+    }
+
+    /// Snapshot the slot-to-name mapping at the current compile point.
+    /// Called by the compiler when finalising a function so that
+    /// [`crate::object::ObjFunction::local_names`] carries the table.
+    pub fn slot_names_snapshot(&self) -> Vec<String> {
+        self.slot_names.clone()
     }
 
     /// Mark the most recently declared local as initialized.
