@@ -8,7 +8,7 @@ use std::{
 use clap::Parser;
 use codemap::Codemap;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use vm::VirtualMachine;
+use vm::{BeforeStmtAction, VirtualMachine};
 
 use crate::vm::DisplayError;
 
@@ -31,6 +31,11 @@ struct App {
     decompile: bool,
     #[arg(long, num_args = 0..=1, default_missing_value = "", require_equals = true)]
     stats: Option<String>,
+    /// Print `[line N]` to stderr before the first opcode of every new
+    /// source line. Useful for understanding control flow and pinpointing
+    /// where the VM spends time. Built on the `BeforeStmt` VM hook.
+    #[arg(long)]
+    trace: bool,
     file: PathBuf,
 }
 
@@ -48,6 +53,12 @@ fn main() -> anyhow::Result<()> {
     let mut vm = VirtualMachine::new();
     if opts.stats.is_some() {
         vm.enable_stats();
+    }
+    if opts.trace {
+        vm.set_before_stmt(Some(Box::new(|vm: &mut VirtualMachine| {
+            eprintln!("[line {}]", vm.current_line());
+            BeforeStmtAction::Continue
+        })));
     }
     if let Err(err) = vm.compile(&code) {
         writeln!(

@@ -168,6 +168,39 @@ pub struct VirtualMachine {
     clock_start: Instant,
     /// Optional performance counters for deterministic profiling
     counters: Option<Box<PerfCounters>>,
+    /// Optional debug hook called before the first opcode of each new
+    /// source line. None in production; populated by an embedded debug
+    /// adapter via [`set_before_stmt`]. The VM owns the hook so it can
+    /// be invoked with `&mut self` from inside the interpret loop.
+    before_stmt: Option<Box<dyn BeforeStmt>>,
+    /// Last source line on which the before_stmt hook was invoked.
+    /// Used to suppress repeat calls within the same source line.
+    last_hook_line: usize,
+}
+
+/// Action returned by a [`BeforeStmt`] hook telling the VM what to do
+/// next. Currently the only variant is `Continue`; future variants may
+/// include single-step / pause-again semantics.
+pub enum BeforeStmtAction {
+    /// Resume execution at the current opcode.
+    Continue,
+}
+
+/// Hook called before the VM executes the first opcode of each new
+/// source line. The hook receives `&mut VirtualMachine` so it can
+/// inspect frames, locals, and the call stack while paused, and may
+/// block (e.g. waiting on a breakpoint resume signal).
+pub trait BeforeStmt: Send {
+    fn before_stmt(&mut self, vm: &mut VirtualMachine) -> BeforeStmtAction;
+}
+
+impl<F> BeforeStmt for F
+where
+    F: FnMut(&mut VirtualMachine) -> BeforeStmtAction + Send,
+{
+    fn before_stmt(&mut self, vm: &mut VirtualMachine) -> BeforeStmtAction {
+        (self)(vm)
+    }
 }
 
 impl Default for VirtualMachine {
@@ -196,6 +229,8 @@ impl VirtualMachine {
             script_closure: None,
             clock_start: Instant::now(),
             counters: None,
+            before_stmt: None,
+            last_hook_line: 0,
         };
         vm.define_native("clock", 0);
         vm
@@ -215,6 +250,15 @@ impl VirtualMachine {
 
     pub fn take_counters(&mut self) -> Option<Box<PerfCounters>> {
         self.counters.take()
+    }
+
+    /// Install a hook called before the first opcode of every new source
+    /// line. Replaces any prior hook. Pass `None` to clear. Intended for
+    /// use by debug adapter implementations (e.g. DAP servers) and
+    /// instrumentation tooling like `--trace`.
+    pub fn set_before_stmt(&mut self, hook: Option<Box<dyn BeforeStmt>>) {
+        self.before_stmt = hook;
+        self.last_hook_line = 0;
     }
 
     // =========================================================================
@@ -603,7 +647,10 @@ impl VirtualMachine {
         self.frames[self.frame_idx].ip
     }
 
-    fn current_line(&self) -> usize {
+    /// Source line of the next opcode to execute in the current frame.
+    /// Public so external tooling (hooks, debug adapters) can query it
+    /// without having to compute it from frame internals.
+    pub fn current_line(&self) -> usize {
         let frame = &self.frames[self.frame_idx];
         let closure = self.get_heap_closure(frame.closure);
         let function = self.get_heap_function(closure.function);
@@ -657,6 +704,29 @@ impl VirtualMachine {
 
         while let Some(x) = self.next_op() {
             let (op_code, size) = x?;
+
+            // Debug-adapter integration: invoke the before-stmt hook on the
+            // first opcode of each new source line. The hook receives a
+            // mutable VM (so it can inspect frames / locals) and may block
+            // (e.g. waiting on a breakpoint resume signal). `take`/`replace`
+            // around the call satisfies the borrow checker: the hook needs
+            // `&mut self`, but `self.before_stmt` is itself a field on
+            // `self`, so we move it out for the duration of the call and
+            // put it back afterwards.
+            if self.before_stmt.is_some() {
+                let line = self.current_line();
+                if line != self.last_hook_line {
+                    self.last_hook_line = line;
+                    let mut hook = self.before_stmt.take();
+                    if let Some(h) = hook.as_mut() {
+                        match h.before_stmt(self) {
+                            BeforeStmtAction::Continue => {}
+                        }
+                    }
+                    self.before_stmt = hook;
+                }
+            }
+
             if let Some(c) = &mut self.counters {
                 let disc = unsafe {
                     *(&op_code as *const OpCode as *const u8)
